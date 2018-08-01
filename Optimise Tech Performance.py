@@ -1,6 +1,5 @@
 #dev issues - search for "dev"
 
-
 import pyodbc
 import pandas as pd
 from sklearn import preprocessing
@@ -22,6 +21,7 @@ con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
 #import job data
 sql_outstanding_jobs = "Select * from dbo.OutstandingJobsForProcessing"
 outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
+outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
 #cleanse 
 priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
 outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
@@ -34,7 +34,6 @@ outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
 #import locations
 sql_locations = "Select * from dbo.LocationDistancesNorm"
 locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
-locations_alldf["EstimatedJobDuration"] = locations_alldf["EstimatedJobDuration"].apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
 #x = locations_alldf[["MetersBetweenPoints"]].astype(float)           
 #x_scaled = min_max_scaler.fit_transform(x)
 #locations_alldf["MetersBetweenPoints_norm"] = x_scaled
@@ -44,8 +43,8 @@ hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
 priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
 
 #population functions
-def population_costs (pop,pop_hierachy):
-    pop["GenerationID"] = 0
+def population_costs (pop,pop_hierachy,generationid):
+    pop["GenerationID"] = generationid
     pop["hierachy"] = pop_hierachy
     #add in cost columns
     pop["cost_TimeToKPITarget"] = 0
@@ -64,13 +63,10 @@ def population_costs (pop,pop_hierachy):
     pop["cost_Distance"] = chromosome_costs_distance
     pop["cost_Total"] = pop["cost_TimeToKPITarget"] + pop["cost_Priority"] + pop["cost_Distance"]
 
-
-
 #cost functions
 def costs_time_to_target (pop,chromosome):
 #    pop = []
 #    chromosome = [0,3,15,18,16,19,2]
-    print (chromosome)
     pop.append(sum([hours_to_target_lookup[x] for x in chromosome]))
     
 def costs_priority (pop,chromosome):
@@ -79,7 +75,6 @@ def costs_priority (pop,chromosome):
 def costs_distance (pop,chromosome):
 #    pop = []
 #    chromosome = [0,3,15,18,16,19,2]
-        
     #convert chromosome to a dataframe
     chromosomedf = pd.DataFrame(chromosome,columns = ["GeneID"])
     #insert last record so the shift operation (later on) works correctly
@@ -93,7 +88,7 @@ def costs_distance (pop,chromosome):
     location_distancedf.reset_index(inplace=True)
     pop = pop.append(location_distancedf["MetersBetweenPoints_norm"].sum())
 
-def travel_time (pop,pop_index,chromosome):
+def constraint_travel_time (pop,pop_index,chromosome):
 #    pop = {}
 #    pop_index = 3
 #    chromosome = [0,13,21]
@@ -104,73 +99,6 @@ def travel_time (pop,pop_index,chromosome):
             tt_lookup_key = tt_storekeys[tt_storekeys.index[tt_i-1]].astype(str) + "|" + str(storekey)
             tt_value = tt_value + locations_alldf.at[tt_lookup_key,"MinutesTravelBetweenPoints"]/60 #dev - make this field to hours to save having to convert       
     pop.update({pop_index:tt_value})
-
-#Create population
-potential_genes = outstanding_jobsdf.index.tolist()
-max_genes = potential_genes[-1]
-
-chromosome_complete = 0
-population_size = 0
-population = []
-    
-while population_size <= population_size_limit-1:
-    #maintain a running total of occupied capacity
-    occupied_capacity = 0
-    total_travel_time = 0
-    chromosome_complete = 0
-    chromosome = [0] #zero is a dummy job representing the techs initial start location
-    while chromosome_complete <= 0:
-        #get a random gene from the available genes
-        valid_genes = list(set(potential_genes) - set(chromosome))
-        random_gene = random.choice(valid_genes)
-    
-        random_gene_volume = outstanding_jobsdf.at[random_gene,"EstimatedJobDuration"]
-        occupied_capacity = occupied_capacity + random_gene_volume 
-        
-        chromosome.append(random_gene)
-        if occupied_capacity >= chromosome_capacity:
-            chromosome_complete = 1
-        random_gene_volume = outstanding_jobsdf.iloc[1:2]    
-        
-    population.append(chromosome)
-    population_size = len(population)
-    
-#get travel times
-travel_time_values= {}
-for i,row in enumerate(population):
-    travel_time(travel_time_values,i,row)    
-    
-#make all chromosomes the same size
-max_chromosome_size = max(map(len,population))    
-for row in population:
-    while len(row) <= max_chromosome_size-1:
-        row.extend([-1]) #-1 is a dummy job with zero cost
-
-populationdf = pd.DataFrame({})
-populationdf = populationdf.append(population)
-#populationdf["GenerationID"] = 0
-#populationdf["hierachy"] = "p"
-#
-##add in cost columns
-#populationdf["cost_TimeToKPITarget"] = 0
-#populationdf["cost_Priority"] = 0
-#populationdf["cost_Distance"] = 0
-#    
-##calculate costs
-#chromosome_costs_time_to_target = []
-#chromosome_costs_priority = []
-#chromosome_costs_distance = []
-#
-#for row in population:
-#    costs_time_to_target(chromosome_costs_time_to_target,row)   
-#    costs_priority(chromosome_costs_priority,row) 
-#    costs_distance(chromosome_costs_distance,row) 
-#
-#populationdf["cost_TimeToKPITarget"] = chromosome_costs_time_to_target
-#populationdf["cost_Priority"] = chromosome_costs_priority
-#populationdf["cost_Distance"] = chromosome_costs_distance
-#populationdf["cost_Total"] = populationdf["cost_TimeToKPITarget"] + populationdf["cost_Priority"] + populationdf["cost_Distance"]
-
 
 def select_parent_for_mating (pop,k):
     potential_parents = {}
@@ -207,9 +135,6 @@ def gene_crossover (pop,p):
                 if proposed_gene in childrendf.loc[parent_a].values:
                     valid_genes = list(set(pop.iloc[parent_b,1:max_chromosome_size]) - set(childrendf.loc[parent_a,1:max_chromosome_size]))
                     proposed_gene = random.choice(valid_genes)     
-                    
-#                    print(generation,parent_a,parent_b,i,proposed_gene)
-                    
                 childrendf.loc[parent_a,i] = proposed_gene
             i = i + 1
         p.sort(reverse=True)
@@ -223,18 +148,58 @@ def mutation (pop):
     pop_to_keep = pop.nsmallest(elite_size,["cost_Total"])
     potential_pop_to_mutate = list(set(pop.index) - set(pop_to_keep.index)) 
 #    pop.nlargest(np.floor(population_size_limit * mutation_rate).astype(int),"cost_Total")
-    
     pop_to_mutate = random.sample(potential_pop_to_mutate,np.floor(population_size * mutation_rate).astype(int))
-    
     for mutation_chromosome in pop_to_mutate:
         mutation_gene = random.randrange(1,max_chromosome_size)
-
         valid_genes = list(set(outstanding_jobsdf.index) - set(pop.iloc[mutation_chromosome,1:max_chromosome_size]) - set([0])) #remove the zero indexed chromosome
         proposed_gene = random.choice(valid_genes)  
-        
         pop.loc[mutation_chromosome,mutation_gene] = proposed_gene
         pop.loc[mutation_chromosome,"hierachy"] = pop.loc[mutation_chromosome,"hierachy"] + "m"
+        
+#Create population
+potential_genes = outstanding_jobsdf.index.tolist()
+max_genes = potential_genes[-1]
 
+chromosome_complete = 0
+population_size = 0
+population = []
+    
+while population_size <= population_size_limit-1:
+    #maintain a running total of occupied capacity
+    occupied_capacity = 0
+    total_travel_time = 0
+    chromosome_complete = 0
+    chromosome = [0] #zero is a dummy job representing the techs initial start location
+    while chromosome_complete <= 0:
+        #get a random gene from the available genes
+        valid_genes = list(set(potential_genes) - set(chromosome))
+        random_gene = random.choice(valid_genes)
+    
+        random_gene_volume = outstanding_jobsdf.at[random_gene,"EstimatedJobDuration"]
+        occupied_capacity = occupied_capacity + random_gene_volume 
+        
+        chromosome.append(random_gene)
+        if occupied_capacity >= chromosome_capacity:
+            chromosome_complete = 1
+        random_gene_volume = outstanding_jobsdf.iloc[1:2]    
+        
+    population.append(chromosome)
+    population_size = len(population)
+    
+#get travel times
+constraint_travel_time_values= {}
+for i,row in enumerate(population):
+    constraint_travel_time(constraint_travel_time_values,i,row)    
+    
+##make all chromosomes the same size
+#max_chromosome_size = max(map(len,population))    
+#for row in population:
+#    while len(row) <= max_chromosome_size-1:
+#        row.extend([-1]) #-1 is a dummy job with zero cost
+
+populationdf = pd.DataFrame({})
+populationdf = populationdf.append(population)
+population_costs(populationdf,"p",0)
       
 #start the evolution
 generation = 0    
@@ -248,36 +213,11 @@ while generation <= 0:
         parents = [0,0]
         while min(parents) == max(parents):
             parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]        
-    
         child_population.extend(gene_crossover(populationdf,parents))
-        
         breeding = breeding + 1 
-    
     child_populationdf = child_populationdf.append(child_population)
     child_populationdf.reset_index(inplace=True,drop=True)
-    child_populationdf["GenerationID"] = generation
-    child_populationdf["hierachy"] = "c"
-    
-    #add in cost columns
-    child_populationdf["cost_TimeToKPITarget"] = 0
-    child_populationdf["cost_Priority"] = 0
-    child_populationdf["cost_Distance"] = 0
-    
-    #calculate costs
-    chromosome_costs_time_to_target = []
-    chromosome_costs_priority = []
-    chromosome_costs_distance = []
-    
-    for row in child_population:
-        costs_time_to_target(chromosome_costs_time_to_target,row)   
-        costs_priority(chromosome_costs_priority,row) 
-        costs_distance(chromosome_costs_distance,row) 
-    
-    child_populationdf["cost_TimeToKPITarget"] = chromosome_costs_time_to_target
-    child_populationdf["cost_Priority"] = chromosome_costs_priority
-    child_populationdf["cost_Distance"] = chromosome_costs_distance
-      
-    child_populationdf["cost_Total"] = child_populationdf["cost_TimeToKPITarget"] + child_populationdf["cost_Priority"] + child_populationdf["cost_Distance"]    
+    population_costs(child_populationdf,"c",generation)
     populationdf = populationdf.append(child_populationdf)
     
 #    populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
@@ -312,6 +252,11 @@ while generation <= 0:
     generation = generation + 1    
         
 
+#output for analysis
+outstanding_jobsdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\outstanding_jobsdf.csv")
+locations_alldf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\locations_alldf.csv")
+populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\populationdf.csv")
+
 #
 #
 ##get the pop record that matches the last min cost
@@ -326,10 +271,6 @@ while generation <= 0:
 #
 #
 #
-
-
-
-
 
 
 
