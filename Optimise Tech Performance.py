@@ -88,7 +88,7 @@ def costs_distance (pop,chromosome):
     location_distancedf.reset_index(inplace=True)
     pop = pop.append(location_distancedf["MetersBetweenPoints_norm"].sum())
 
-def constraint_travel_time (chromosome):
+def constraint_travel_time (pop,pop_index,chromosome):
 #    pop = {}
 #    pop_index = 3
 #    chromosome = [0,13,21]
@@ -98,24 +98,7 @@ def constraint_travel_time (chromosome):
         if tt_i != 0:
             tt_lookup_key = tt_storekeys[tt_storekeys.index[tt_i-1]].astype(str) + "|" + str(storekey)
             tt_value = tt_value + locations_alldf.at[tt_lookup_key,"MinutesTravelBetweenPoints"]/60 #dev - make this field to hours to save having to convert       
-    return tt_value
-#    pop.update({pop_index:tt_value})
-
-def job_intra_store_attributes (pop,chromosome,attribute):
-#    pop = []
-#    chromosome = [0,3,15,18,16,19,2]
-    #convert chromosome to a dataframe
-    chromosomedf = pd.DataFrame(chromosome,columns = ["GeneID"])
-    #insert last record so the shift operation (later on) works correctly
-    chromosomedf = chromosomedf.append(chromosomedf.iloc[-1,0:2],ignore_index=True)
-    #get storekey at the job to be undertaken (end point) and the prior location (start point)
-    end_pointdf = chromosomedf.merge(outstanding_jobsdf,left_on="GeneID",right_index=True,how="left")[["GeneID","StoreKey"]]
-    start_pointdf = end_pointdf.shift(periods=1, axis=0).fillna(0)
-    location_distance_loopkupdf = end_pointdf.merge(start_pointdf,left_index=True,right_index=True,how="left")
-    location_distance_loopkupdf["StoreKeyLookup"] = location_distance_loopkupdf["StoreKey_y"].astype(int).astype(str) + "|" + location_distance_loopkupdf["StoreKey_x"].astype(str)
-    location_distancedf = location_distance_loopkupdf.merge(locations_alldf,left_on="StoreKeyLookup",right_on="LocationLookupKey",how="left").set_index(location_distance_loopkupdf.index)
-    location_distancedf.reset_index(inplace=True)
-    pop = pop.append(location_distancedf[attribute].sum())
+    pop.update({pop_index:tt_value})
 
 def select_parent_for_mating (pop,k):
     potential_parents = {}
@@ -172,10 +155,6 @@ def mutation (pop):
         proposed_gene = random.choice(valid_genes)  
         pop.loc[mutation_chromosome,mutation_gene] = proposed_gene
         pop.loc[mutation_chromosome,"hierachy"] = pop.loc[mutation_chromosome,"hierachy"] + "m"
-
-def get_new_chromosome_index(i):
-    i = i + 1
-    return i
         
 #Create population
 potential_genes = outstanding_jobsdf.index.tolist()
@@ -183,10 +162,8 @@ max_genes = potential_genes[-1]
 
 chromosome_complete = 0
 population_size = 0
-population = {}
-constraint_travel_time_values= {}
-chromosome_index_no = 0
-
+population = []
+    
 while population_size <= population_size_limit-1:
     #maintain a running total of occupied capacity
     occupied_capacity = 0
@@ -206,27 +183,14 @@ while population_size <= population_size_limit-1:
             chromosome_complete = 1
         random_gene_volume = outstanding_jobsdf.iloc[1:2]    
         
-    chromosome_index_no = get_new_chromosome_index(chromosome_index_no)        
-    population.update({chromosome_index_no:chromosome})
-
-    #get travel times
-    constraint_travel_time_values= {}
-    for i,row in enumerate(population):
-#        constraint_travel_time(constraint_travel_time_values,i,row)  
-        job_intra_store_attributes()
-    
-    
-    
-    
-    #get travel time
-    constraint_travel_time_values.update({chromosome_index_no:chromosome})    
-    population_size = population_size + 1
+    population.append(chromosome)
+    population_size = len(population)
     
 #get travel times
-#constraint_travel_time_values= {}
-#for i,row in enumerate(population):
-#    constraint_travel_time(constraint_travel_time_values,i,row)    
-#    
+constraint_travel_time_values= {}
+for i,row in enumerate(population):
+    constraint_travel_time(constraint_travel_time_values,i,row)    
+    
 ##make all chromosomes the same size
 #max_chromosome_size = max(map(len,population))    
 #for row in population:
@@ -234,10 +198,6 @@ while population_size <= population_size_limit-1:
 #        row.extend([-1]) #-1 is a dummy job with zero cost
 
 populationdf = pd.DataFrame({})
-s = pd.DataFrame.from_dict(population)
-data = {'col_1': [3, 2, 1, 0], 'col_2': ['a', 'b', 'c', 'd']}
-
-
 populationdf = populationdf.append(population)
 population_costs(populationdf,"p",0)
       
@@ -314,7 +274,6 @@ populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Deve
 
 
 
-print (chromosome_index_no)
 
 
 
