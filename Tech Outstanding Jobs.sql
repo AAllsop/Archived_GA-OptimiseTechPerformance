@@ -1,3 +1,4 @@
+drop table dbo.OutstandingJobsForProcessing
 EXEC Reporting.DropTempTablesFromSession
 
 --initial starting location co-ordinates
@@ -84,22 +85,42 @@ SELECT
    ,0 HoursToTarget
 FROM #OutstandingJobs oj
 GROUP BY ResourceKey
+UNION
+SELECT
+	-1 GeneID
+   ,'Dummy Job' JobType
+   ,ResourceKey
+   ,'0' FaultID
+   ,'2099-12-31' CalloutDateTime
+   ,'0' StoreKey
+   ,0 Longitude
+   ,0 Latitude
+   ,'Low' Priority
+   ,'2099-12-31' KPITargetDate
+   ,0 EstimatedJobDuration
+   ,0 HoursToTarget
+FROM #OutstandingJobs oj
+GROUP BY ResourceKey
 
---SELECT
---	GeneID
---   ,JobType
---   ,ResourceKey
---   ,faultid
---   ,CalloutDateTime
---   ,StoreKey
---   ,Longitude
---   ,Latitude
---   ,Priority
---   ,KPITargetDate
---   ,EstimatedJobDuration
---   ,HoursToTarget
---INTO dbo.OutstandingJobsForProcessing
---FROM #OutstandingJobsWithCL
---WHERE ResourceKey = 2240 
+
+
+
+
+SELECT
+	GeneID
+   ,JobType
+   ,ResourceKey
+   ,faultid
+   ,CalloutDateTime
+   ,StoreKey
+   ,Longitude
+   ,Latitude
+   ,Priority
+   ,KPITargetDate
+   ,EstimatedJobDuration
+   ,HoursToTarget
+INTO dbo.OutstandingJobsForProcessing
+FROM #OutstandingJobsWithCL
+WHERE ResourceKey = 2240 
 
 
