@@ -6,6 +6,8 @@ from sklearn import preprocessing
 import numpy as np
 import random
 
+import os
+
 chromosome_capacity = 6 #hours
 population_size_limit = 30
 mutation_rate = 0.30 #%
@@ -13,14 +15,23 @@ elite_size = 10
 temp_childdf = []
 temp_auditdf1 = []
 
-con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
-                     "Server=CHADWUA1\DW;"
-                     "Database=City_DW;"
-                     "Trusted_Connection=yes")
+env = os.environ["COMPUTERNAME"]
+if env != "7-PC" :
+    con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
+                         "Server=CHADWUA1\DW;"
+                         "Database=City_DW;"
+                         "Trusted_Connection=yes")
+    sql_outstanding_jobs = "Select * from dbo.OutstandingJobsForProcessing"
+    outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
+    sql_locations = "Select * from dbo.LocationDistancesNorm"
+    locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
+else:
+#if at home import from CSV
+    outstanding_jobsdf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\OutstandingJobsForProcessing.csv").set_index("GeneID")
+    locations_alldf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\LocationDistancesNorm.csv").set_index("LocationLookupKey")
+       
 
-#import job data
-sql_outstanding_jobs = "Select * from dbo.OutstandingJobsForProcessing"
-outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
+# dev - randomise the est job duration
 outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
 #cleanse 
 priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
@@ -32,8 +43,7 @@ x_scaled = min_max_scaler.fit_transform(x)
 outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
 
 #import locations
-sql_locations = "Select * from dbo.LocationDistancesNorm"
-locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
+
 #x = locations_alldf[["MetersBetweenPoints"]].astype(float)           
 #x_scaled = min_max_scaler.fit_transform(x)
 #locations_alldf["MetersBetweenPoints_norm"] = x_scaled
@@ -96,14 +106,14 @@ def constraint_travel_time (chromosome):
         tt_value = 0
         if tt_i != 0:
             tt_lookup_key = tt_storekeys[tt_storekeys.index[tt_i-1]].astype(str) + "|" + str(storekey)
-            tt_value = tt_value + locations_alldf.at[tt_lookup_key,"MinutesTravelBetweenPoints"]/60 #dev - make this field to hours to save having to convert       
+            tt_value = tt_value + locations_alldf.at[tt_lookup_key,"MinutesBetweenPoints"]/60 #dev - make this field to hours to save having to convert       
     return tt_value
 #    pop.update({pop_index:tt_value})
 
 def job_intra_store_attributes (chromosome,attribute):
 #    pop = []
 #    chromosome = [0,3,15,18,16,19,2]
-#    attribute = "MinutesTravelBetweenPoints"
+#    attribute = "MinutesBetweenPoints"
     #convert chromosome to a dataframe
     chromosomedf = pd.DataFrame(chromosome,columns = ["GeneID"])
     #insert last record so the shift operation (later on) works correctly
@@ -129,7 +139,7 @@ def select_parent_for_mating (pop,k):
         i = i + 1
         return parent;
 
-def gene_crossover (pop,p):
+def gene_crossover_typeA (pop,p):
 #    p = [2,5]
 #    pop = populationdf
     childrendf = pd.DataFrame(columns=list(range(0,max_chromosome_size)))
@@ -196,7 +206,7 @@ while population_size <= population_size_limit-1:
     chromosome = [0] #zero is a dummy job representing the techs initial start location
     while chromosome_complete <= 0:
         #get a random gene from the available genes
-        valid_genes = list(set(potential_genes) - set(chromosome))
+        valid_genes = list(set(potential_genes) - set(chromosome)- set([-1,0]))
         random_gene = random.choice(valid_genes)
         random_gene_volume = outstanding_jobsdf.at[random_gene,"EstimatedJobDuration"]
         occupied_capacity = occupied_capacity + random_gene_volume 
@@ -214,7 +224,7 @@ while population_size <= population_size_limit-1:
     population.update({chromosome_index_no:chromosome})
     
     #get travel time
-    travel_time = job_intra_store_attributes(chromosome,"MinutesTravelBetweenPoints")
+    travel_time = job_intra_store_attributes(chromosome,"MinutesBetweenPoints")
     constraint_travel_time_values.update({chromosome_index_no:travel_time})    
     population_size = population_size + 1
     
@@ -236,18 +246,25 @@ while generation <= 0:
     breeding = 1
     child_population = []
     child_populationdf = pd.DataFrame({})
+    #breed the kids
     while breeding <= population_size_limit/2:
         parents = [0,0]
         while min(parents) == max(parents):
             parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]        
-        child_population.extend(gene_crossover(populationdf,parents))
+        
+        
+        child_population.extend(gene_crossover_typeA(populationdf,parents))
+        
+        
+        
+        
+        
         breeding = breeding + 1 
     child_populationdf = child_populationdf.append(child_population)
     child_populationdf.reset_index(inplace=True,drop=True)
     population_costs(child_populationdf,"c",generation)
     populationdf = populationdf.append(child_populationdf)
     
-#    populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
     populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
     populationdf.reset_index(inplace=True,drop=True)
     
