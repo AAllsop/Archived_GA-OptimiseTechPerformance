@@ -1,4 +1,5 @@
 #dev issues - search for "dev"
+#dev - remove gene cross over types when in prod
 
 import pyodbc
 import pandas as pd
@@ -14,6 +15,11 @@ mutation_rate = 0.30 #%
 elite_size = 10
 temp_childdf = []
 temp_auditdf1 = []
+chromosome_index_no = 0
+
+#component testing versions
+crossover_type = "partial" #gene crossover type
+parent_selection_type = "random"
 
 env = os.environ["COMPUTERNAME"]
 if env != "7-PC" :
@@ -41,6 +47,9 @@ min_max_scaler = preprocessing.MinMaxScaler()
 x = outstanding_jobsdf[["HoursToTarget"]].astype("float")
 x_scaled = min_max_scaler.fit_transform(x)
 outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
+
+potential_genes = outstanding_jobsdf.index.tolist()
+
 
 #import locations
 
@@ -129,47 +138,53 @@ def job_intra_store_attributes (chromosome,attribute):
     return attribute_value
 
 def select_parent_for_mating (pop,k):
-    potential_parents = {}
-    i = 1
-    while i <= k:   
-        member = random.choice(pop.index)
-        member_cost = pop.at[member,"cost_Total"]
-        potential_parents[member] = member_cost
-        parent = min(potential_parents,key=potential_parents.get)
-        i = i + 1
-        return parent;
+    if parent_selection_type == "random":
+        potential_parents = {}
+        i = 1
+        while i <= k:   
+            member = random.choice(pop.index)
+            member_cost = pop.at[member,"cost_Total"]
+            potential_parents[member] = member_cost
+            parent = min(potential_parents,key=potential_parents.get)
+            i = i + 1
+            return parent;
 
-def gene_crossover_typeA (pop,p):
+def gene_crossover (pop,child_pop,p):
 #    p = [2,5]
 #    pop = populationdf
-    childrendf = pd.DataFrame(columns=list(range(0,max_chromosome_size)))
-    crossover_points = [random.randrange(1,max_chromosome_size),random.randrange(1,max_chromosome_size)]
-    crossover_start_pt = min(crossover_points)
-    crossover_end_pt = max(crossover_points) + 1
+#    child_pop = child_populationdf
+    #get the size of the smallest chromosome - this determines the range of the crossover    
+    max_range = min(pop.loc[p,"Size"]) + 1
+    crossover_points = [random.randrange(1,max_range),random.randrange(1,max_range)]
+    crossover_range = list(range(min(crossover_points),max(crossover_points) + 1))
     #loop 2x (to create 2 children)
     x = 0
-    p.sort()
     while x <= 1: #1: 
         parent_a = p[0]
-        parent_b = p[1] 
-        childrendf = childrendf.append(pop.iloc[parent_a,crossover_start_pt:crossover_end_pt])
-        childrendf.loc[parent_a,0] = 0
-        i = 1
-        #loop through columns
-        while i <= max_chromosome_size-1:
-            if childrendf.isnull().loc[parent_a,i]:
-                proposed_gene = pop.loc[parent_b,i]
-                #if the proposed gene from the crossover exists choose a random one
-                if proposed_gene in childrendf.loc[parent_a].values:
-                    valid_genes = list(set(pop.iloc[parent_b,1:max_chromosome_size]) - set(childrendf.loc[parent_a,1:max_chromosome_size]))
-                    proposed_gene = random.choice(valid_genes)     
-                childrendf.loc[parent_a,i] = proposed_gene
-            i = i + 1
+        parent_b = p[1]
+        child_pop = child_pop.append(pop.loc[parent_a,:].copy())
+        #set index for the new child
+        new_child_index = get_new_chromosome_index()
+        #insert parent into child dataframe
+        child_pop = child_pop.rename(index={parent_a:new_child_index})
+        #do crossover
+        child_pop.loc[new_child_index,crossover_range] = pop.loc[parent_b,crossover_range]
+        child_chromosome_size = child_pop.loc[new_child_index,"Size"]
+        #loop through columns where there are duplicate genes and replace duplicates
+        if True in child_pop.loc[new_child_index,list(range(1,child_chromosome_size+1))].duplicated().values:
+            i = 1
+            while i <= child_chromosome_size-1:
+                if child_pop.isnull().loc[new_child_index,i]:
+                    proposed_gene = pop.loc[parent_b,i]
+                    #if the proposed gene from the crossover exists choose a random one
+                    if proposed_gene in child_pop.loc[new_child_index].values:
+                        valid_genes = list(set(potential_genes) - set(child_pop.loc[new_child_index,1:max_chromosome_size]))
+                        proposed_gene = random.choice(valid_genes)     
+                    child_pop.loc[new_child_index,i] = proposed_gene
+                i = i + 1
+        #reverse parents for next loop
         p.sort(reverse=True)
         x = x + 1
-    children = childrendf.values.tolist()
-    
-    return children
         
 def mutation (pop):
 #    pop = populationdf
@@ -184,12 +199,16 @@ def mutation (pop):
         pop.loc[mutation_chromosome,mutation_gene] = proposed_gene
         pop.loc[mutation_chromosome,"hierachy"] = pop.loc[mutation_chromosome,"hierachy"] + "m"
 
-def get_new_chromosome_index(i):
-    i = i + 1
-    return i
+def get_new_chromosome_index():
+    global chromosome_index_no
+    chromosome_index_no = chromosome_index_no + 1
+    return chromosome_index_no
         
+def repair_chromosome_size (k,v):
+    while len(v) <= max_chromosome_size-1:
+        v.extend([-1]) #-1 is a dummy job with zero cost
+
 #Create population
-potential_genes = outstanding_jobsdf.index.tolist()
 max_genes = potential_genes[-1]
 
 chromosome_complete = 0
@@ -220,21 +239,26 @@ while population_size <= population_size_limit-1:
         if l > max_chromosome_size:
             max_chromosome_size = l
             
-    chromosome_index_no = get_new_chromosome_index(chromosome_index_no)        
+    chromosome_index_no = get_new_chromosome_index()        
     population.update({chromosome_index_no:chromosome})
     
     #get travel time
-    travel_time = job_intra_store_attributes(chromosome,"MinutesBetweenPoints")
+    travel_time = job_intra_store_attributes(chromosome,"MinutesTravelBetweenPoints")
     constraint_travel_time_values.update({chromosome_index_no:travel_time})    
     population_size = population_size + 1
     
+
+chromosome_sizes = {}    
 ##make all chromosomes the same size
 for k,v in population.items():
-    while len(v) <= max_chromosome_size-1:
-        v.extend([-1]) #-1 is a dummy job with zero cost
+    chromosome_sizes.update({k:len(v)-1})
+    repair_chromosome_size(k,v)
+
+pop_column_headers = list(range(0,max_chromosome_size))
 
 populationdf = pd.DataFrame({})
 populationdf = pd.DataFrame.from_dict(population,orient="index")
+populationdf["Size"] = populationdf.index.to_series().map(chromosome_sizes)
 
 population_costs(populationdf, population,"p",0)
       
@@ -244,16 +268,16 @@ generation = 0
 audit = pd.DataFrame(columns=["GenerationID","MinCost"])
 while generation <= 0:
     breeding = 1
-    child_population = []
-    child_populationdf = pd.DataFrame({})
+    child_population = {}
+    child_populationdf = pd.DataFrame(columns=pop_column_headers + ["Size"])
     #breed the kids
     while breeding <= population_size_limit/2:
         parents = [0,0]
-        while min(parents) == max(parents):
+        while min(parents) == max(parents): #ensure no asexual repro
             parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]        
+
         
-        
-        child_population.extend(gene_crossover_typeA(populationdf,parents))
+        gene_crossover(populationdf,child_populationdf,parents)
         
         
         
