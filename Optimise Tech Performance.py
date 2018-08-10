@@ -149,20 +149,23 @@ def select_parent_for_mating (pop,k):
             i = i + 1
             return parent;
 
-def gene_crossover (pop,child_pop,p):
+def gene_crossover (pop,p):
 #    p = [2,5]
 #    pop = populationdf
-#    child_pop = child_populationdf
+    child_pop = pd.DataFrame(columns=pop_column_headers + ["Size"])
     #get the size of the smallest chromosome - this determines the range of the crossover    
     max_range = min(pop.loc[p,"Size"]) + 1
     crossover_points = [random.randrange(1,max_range),random.randrange(1,max_range)]
     crossover_range = list(range(min(crossover_points),max(crossover_points) + 1))
+    #treat a python bug when list contains a single element
+    if len(crossover_range) == 1:
+        crossover_range = crossover_range[0]
     #loop 2x (to create 2 children)
     x = 0
     while x <= 1: #1: 
         parent_a = p[0]
         parent_b = p[1]
-        child_pop = child_pop.append(pop.loc[parent_a,:].copy())
+        child_pop = child_pop.append(pop.loc[parent_a,pop_column_headers + ["Size"]].copy())
         #set index for the new child
         new_child_index = get_new_chromosome_index()
         #insert parent into child dataframe
@@ -185,7 +188,10 @@ def gene_crossover (pop,child_pop,p):
         #reverse parents for next loop
         p.sort(reverse=True)
         x = x + 1
+    return child_pop
         
+#        child_populationdf = child_populationdf.append(child_pop)
+    
 def mutation (pop):
 #    pop = populationdf
     pop_to_keep = pop.nsmallest(elite_size,["cost_Total"])
@@ -275,20 +281,20 @@ while generation <= 0:
         parents = [0,0]
         while min(parents) == max(parents): #ensure no asexual repro
             parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]        
-
-        
-        gene_crossover(populationdf,child_populationdf,parents)
-        
-        
-        
-        
-        
+        child_populationdf = child_populationdf.append(gene_crossover(populationdf,parents))
         breeding = breeding + 1 
-    child_populationdf = child_populationdf.append(child_population)
-    child_populationdf.reset_index(inplace=True,drop=True)
-    population_costs(child_populationdf,"c",generation)
+
+    child_populationdf = child_populationdf.drop(["Size"],axis=1)
+    child_population = child_populationdf.transpose().to_dict("list")
+    
+    population_costs(child_populationdf,child_population ,"c",generation)
+    
     populationdf = populationdf.append(child_populationdf)
     
+    ------------------------------------
+    CALL A REPAIR FUNCTION HERE
+    ------------------------------------
+        
     populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
     populationdf.reset_index(inplace=True,drop=True)
     
@@ -343,6 +349,7 @@ populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Deve
 
 
 print (chromosome_index_no)
+
 
 
 
