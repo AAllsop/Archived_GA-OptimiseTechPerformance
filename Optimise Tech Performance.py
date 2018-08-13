@@ -35,10 +35,11 @@ else:
 #if at home import from CSV
     outstanding_jobsdf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\OutstandingJobsForProcessing.csv").set_index("GeneID")
     locations_alldf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\LocationDistancesNorm.csv").set_index("LocationLookupKey")
-       
 
 # dev - randomise the est job duration
-outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
+outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf[outstanding_jobsdf.index != 0].EstimatedJobDuration.apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
+outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].fillna(0)
+
 #cleanse 
 priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
 outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
@@ -62,25 +63,39 @@ hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
 priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
 
 #population functions
-def population_costs (pop_df,pop_dict,pop_hierachy,generationid):    
-    #add columns to dataframe
-    pop_df["GenerationID"] = generationid
-    pop_df["hierachy"] = pop_hierachy
+def population_additional_columns(pop_df):
+    pop_df = populationdf
+    pop_df["Size"] = 0    
+    global size_column_loc
+    size_column_loc= pop_df.columns.get_loc("Size")+1
+    
+    pop_df["GenerationID"] = 0
+    pop_df["RowChanged"] = 0
+    pop_df["constraint_workable_hours"] = 0
     pop_df["cost_TimeToKPITarget"] = 0
     pop_df["cost_Priority"] = 0
-    pop_df["cost_Distance"] = 0
+    pop_df["cost_Distance"] = 0    
+
+def population_costs (pop_df):    
+    pop_df = populationdf
     #calculate costs
     chromosome_costs_time_to_target = {}
     chromosome_costs_priority = {}
     chromosome_costs_distance = {}
-    for k,v in pop_dict.items():
-        chromosome_costs_time_to_target.update({k:costs_time_to_target(v)})   
-        chromosome_costs_priority.update({k:costs_priority(v)})
-        chromosome_costs_distance.update({k:job_intra_store_attributes(v,"MetersBetweenPoints_norm")})       
+    chromosome_constraint_workable_hours = {}
+    for row in pop_df.itertuples():
+        i = row[0]
+        s = row[size_column_loc]
+        v = list(row[1:s+2])   
+        chromosome_costs_time_to_target.update({i:costs_time_to_target(v)})   
+        chromosome_costs_priority.update({i:costs_priority(v)})
+        chromosome_costs_distance.update({i:job_intra_store_attributes(v,"MetersBetweenPoints_norm")})   
+        chromosome_constraint_workable_hours.update({i:constraint_workable_hours(v)})    
     pop_df["cost_TimeToKPITarget"] = pop_df.index.to_series().map(chromosome_costs_time_to_target)
     pop_df["cost_Priority"] = pop_df.index.to_series().map(chromosome_costs_priority)
     pop_df["cost_Distance"] = pop_df.index.to_series().map(chromosome_costs_distance)
     pop_df["cost_Total"] = pop_df["cost_TimeToKPITarget"] + pop_df["cost_Priority"] + pop_df["cost_Distance"]
+    pop_df["constraint_workable_hours"] = pop_df.index.to_series().map(chromosome_constraint_workable_hours)
 
 #cost functions
 def costs_time_to_target (chromosome):
@@ -118,6 +133,11 @@ def constraint_travel_time (chromosome):
             tt_value = tt_value + locations_alldf.at[tt_lookup_key,"MinutesBetweenPoints"]/60 #dev - make this field to hours to save having to convert       
     return tt_value
 #    pop.update({pop_index:tt_value})
+
+def constraint_workable_hours (chromosome):
+#    chromosome = [0,13,21]    
+    hrs = sum(outstanding_jobsdf.loc[chromosome,"EstimatedJobDuration"])
+    return hrs
 
 def job_intra_store_attributes (chromosome,attribute):
 #    pop = []
@@ -172,7 +192,7 @@ def gene_crossover (pop,p):
         child_pop = child_pop.rename(index={parent_a:new_child_index})
         #do crossover
         child_pop.loc[new_child_index,crossover_range] = pop.loc[parent_b,crossover_range]
-        child_chromosome_size = child_pop.loc[new_child_index,"Size"]
+        child_chromosome_size = child_pop.loc[new_child_index,"Size"].astype(int)
         #loop through columns where there are duplicate genes and replace duplicates
         if True in child_pop.loc[new_child_index,list(range(1,child_chromosome_size+1))].duplicated().values:
             i = 1
@@ -189,8 +209,6 @@ def gene_crossover (pop,p):
         p.sort(reverse=True)
         x = x + 1
     return child_pop
-        
-#        child_populationdf = child_populationdf.append(child_pop)
     
 def mutation (pop):
 #    pop = populationdf
@@ -203,7 +221,7 @@ def mutation (pop):
         valid_genes = list(set(outstanding_jobsdf.index) - set(pop.iloc[mutation_chromosome,1:max_chromosome_size]) - set([0])) #remove the zero indexed chromosome
         proposed_gene = random.choice(valid_genes)  
         pop.loc[mutation_chromosome,mutation_gene] = proposed_gene
-        pop.loc[mutation_chromosome,"hierachy"] = pop.loc[mutation_chromosome,"hierachy"] + "m"
+        pop.loc[mutation_chromosome,"Hierachy"] = pop.loc[mutation_chromosome,"Hierachy"] + "m"
 
 def get_new_chromosome_index():
     global chromosome_index_no
@@ -264,19 +282,18 @@ pop_column_headers = list(range(0,max_chromosome_size))
 
 populationdf = pd.DataFrame({})
 populationdf = pd.DataFrame.from_dict(population,orient="index")
+population_additional_columns(populationdf)
 populationdf["Size"] = populationdf.index.to_series().map(chromosome_sizes)
-populationdf["RowChanged"] = 1 #true
-population_costs(populationdf, population,"p",0)
-
+population_costs(populationdf)
       
 #start the evolution
-generation = 0    
+generation = 1    
 #initialise audit
 audit = pd.DataFrame(columns=["GenerationID","MinCost"])
-while generation <= 0:
+while generation <= 1:
     breeding = 1
     child_population = {}
-    child_populationdf = pd.DataFrame(columns=pop_column_headers + ["Size"])
+    child_populationdf = pd.DataFrame(columns=populationdf.columns)
     #breed the kids
     while breeding <= population_size_limit/2:
         parents = [0,0]
@@ -288,8 +305,12 @@ while generation <= 0:
     #remove the 'size' column and transpose to a list
     child_population = child_populationdf.iloc[:,pop_column_headers].transpose().to_dict("list")
     #get children costs and append to main population dataframe
-    population_costs(child_populationdf,child_population ,"c",generation)
+    population_costs(child_populationdf)
+    child_populationdf["GenerationID"] = generation
+    child_populationdf["RowChanged"] = 0
+#    generation = 2
     populationdf = populationdf.append(child_populationdf)
+    
     
     ------------------------------------
     CALL A REPAIR FUNCTION HERE
