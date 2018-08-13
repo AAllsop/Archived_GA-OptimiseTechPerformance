@@ -265,8 +265,9 @@ pop_column_headers = list(range(0,max_chromosome_size))
 populationdf = pd.DataFrame({})
 populationdf = pd.DataFrame.from_dict(population,orient="index")
 populationdf["Size"] = populationdf.index.to_series().map(chromosome_sizes)
-
+populationdf["RowChanged"] = 1 #true
 population_costs(populationdf, population,"p",0)
+
       
 #start the evolution
 generation = 0    
@@ -284,11 +285,10 @@ while generation <= 0:
         child_populationdf = child_populationdf.append(gene_crossover(populationdf,parents))
         breeding = breeding + 1 
 
-    child_populationdf = child_populationdf.drop(["Size"],axis=1)
-    child_population = child_populationdf.transpose().to_dict("list")
-    
+    #remove the 'size' column and transpose to a list
+    child_population = child_populationdf.iloc[:,pop_column_headers].transpose().to_dict("list")
+    #get children costs and append to main population dataframe
     population_costs(child_populationdf,child_population ,"c",generation)
-    
     populationdf = populationdf.append(child_populationdf)
     
     ------------------------------------
