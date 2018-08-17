@@ -102,14 +102,14 @@ SELECT
 FROM #OutstandingJobs oj
 GROUP BY ResourceKey
 
-
+select DISTINCT dr.SubType from Fault.DimResources dr
 
 
 
 SELECT
 	GeneID
    ,JobType
-   ,ResourceKey
+   ,o.ResourceKey
    ,faultid
    ,CalloutDateTime
    ,StoreKey
@@ -120,7 +120,11 @@ SELECT
    ,EstimatedJobDuration
    ,HoursToTarget
 INTO dbo.OutstandingJobsForProcessing
-FROM #OutstandingJobsWithCL
-WHERE ResourceKey = 2240 
+FROM #OutstandingJobsWithCL o
+Inner Join Fault.DimResources dr
+ON o.ResourceKey = dr.ResourceKey
+Inner Join dbo.ResourceKey rk
+ON o.ResourceKey = rk.ResourceKey
+WHERE dr.SubType IN ('RST','RHVACT')
 
 
