@@ -1,13 +1,10 @@
 #dev issues - search for "dev"
 #dev - remove gene cross over types when in prod
-import pdb
 import pyodbc
 import pandas as pd
 from sklearn import preprocessing
 import numpy as np
 import random
-import time
-import os
 
 #pdb.set_trace()
 #def main (
@@ -36,79 +33,7 @@ parent_selection_type = "random"
 population_selection_type = "full random" #[full random, include artifical selection]
 crossover_type = "diagonal" #gene crossover type [diagonal,parallel]
 
-#parent_selection_type = "random"
-artificial_selection_limit = np.floor(population_size_limit * artificial_selection_fraction)    
-global chromosome_index_no
-chromosome_index_no = 0
-start_time = time.time()
-env = os.environ["COMPUTERNAME"]
-if env != "7-PC" :
-    con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
-                         "Server=CHADWUA1\DW;"
-                         "Database=City_DW;"
-                         "Trusted_Connection=yes")
-    sql_outstanding_jobs = "Select * from dbo.[OutstandingJobsForProcessing_BenchMarking_Iterations] WHERE BenchMarkName = '2018-07-03 04:00:00'"
-    outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
-    sql_locations = "Select * from dbo.LocationDistancesNorm_BenchMarking WHERE BenchMarkName = '2018-07-03 04:00:00'" #  where ResourceKey = " + str(ResourceKey)
-    locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
-else:
-#if at home import from CSV
-    outstanding_jobsdf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\OutstandingJobsForProcessing.csv").set_index("GeneID")
-    locations_alldf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\LocationDistancesNorm.csv").set_index("LocationLookupKey")
-
-chromosome_capacity = min(outstanding_jobsdf["JobCount"]-1) #hours
-
-# dev - remove all records bar those for a specific resource key
-#outstanding_jobsdf = outstanding_jobsdf[outstanding_jobsdf["ResourceKey"] == 1630]   
-
-# dev - randomise the est job duration
-#outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf[outstanding_jobsdf.index != 0].EstimatedJobDuration.apply(lambda x:random.choice([1,1.5,2,2.5,3,3.5]))
-outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].fillna(0)
-
-#cleanse 
-priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
-outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
-#set all jobs older than 100hrs to 100hrs. Therefore reducing their influence
-premature_outstanding_jobs_est_duration_sum = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]["EstimatedJobDuration"].sum()
-if premature_outstanding_jobs_est_duration_sum > chromosome_capacity*3:
-    outstanding_jobsdf = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]
-else:
-    outstanding_jobsdf.loc[outstanding_jobsdf["HoursToTarget"]>=hours_to_target_ignore_threshold,"HoursToTarget"] = hours_to_target_ignore_threshold
-
-#normalise data
-min_max_scaler = preprocessing.MinMaxScaler()
-x = outstanding_jobsdf[["HoursToTarget"]].astype("float")
-x_scaled = min_max_scaler.fit_transform(x)
-outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
-
-potential_genes = list(set(outstanding_jobsdf.index.tolist()) - set([0,-1]))
-
-#find the potentially largest chromosome size
-outstanding_jobs_by_duration = outstanding_jobsdf.loc[:,"EstimatedJobDuration"].sort_values().to_frame()
-outstanding_jobs_by_duration["RollingDurationSum"] = outstanding_jobs_by_duration.rolling(window = 10000, min_periods = 1 ).sum()
-outstanding_jobs_by_duration = outstanding_jobs_by_duration.reset_index()
-outstanding_jobs_over_hrs = outstanding_jobs_by_duration[outstanding_jobs_by_duration["RollingDurationSum"] >= chromosome_capacity].index
-
-max_chromosome_size = min(outstanding_jobs_over_hrs)
-pop_column_headers = list(range(0,max_chromosome_size+1))
-
-#create a lookup of nomalised positional costs
-positions_cost_lookup = pd.DataFrame({"position":range(1,max_chromosome_size+1)})
-positions_cost_lookup["inverse cost"] = 1/(np.log(positions_cost_lookup["position"]+1))
-min_pos_cost = min(positions_cost_lookup["inverse cost"])
-max_pos_cost = max(positions_cost_lookup["inverse cost"])
-positions_cost_lookup["cost_norm"] = ((positions_cost_lookup["inverse cost"]-min_pos_cost)/(max_pos_cost-min_pos_cost))*-1
-
-#outstanding_jobs_for_priority_genesdf = outstanding_jobsdf["Priority"]
-
-#import locations
-#x = locations_alldf[["MetersBetweenPoints"]].astype(float)           
-#x_scaled = min_max_scaler.fit_transform(x)
-#locations_alldf["MetersBetweenPoints_norm"] = x_scaled
-  
-#create lookups
-hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
-priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
+artificial_selection_limit = np.floor(population_size_limit * artificial_selection_fraction)   
 
 #population functions
 def population_additional_columns(pop_df):
@@ -376,109 +301,177 @@ def compile_best_solution(sol_index):
     best_solution_compiled = d[["BestJobIDOrdering","GeneID","StoreKey","KMsBetweenPoints", "Priority","HoursToTarget","faultid"]].sort_values(["BestJobIDOrdering","HoursToTarget"])
     
 #------------------------------------------------------------------------------
-        
-#Create population-------------------------------------------------------------
-#    max_genes = potential_genes[-1]
-chromosome_complete = 0
-population_size = 0
-population = {}
-#    constraint_travel_time_values= {}
-#    chromosome_index_no = 0
+    
+    
+bench_mark_results = []
+#parent_selection_type = "random" 
+con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
+                     "Server=CHADWUA1\DW;"
+                     "Database=City_DW;"
+                     "Trusted_Connection=yes")
+sql_bench_mark_names = "select DISTINCT Top 2 BenchMarkName from [OutstandingJobsForProcessing_BenchMarking_Iterations]  WHERE BenchMarkName <> '2018-07-01 04:00:00'"
+bench_mark_names = pd.read_sql_query(sql_bench_mark_names,con)
+bench_mark_names = bench_mark_names["BenchMarkName"].values.tolist()
 
-
-
-if population_selection_type == "include artifical selection":
-    while population_size <= artificial_selection_limit-1:
-#            occupied_capacity = 0
+for bench_mark_name in bench_mark_names:
+    global chromosome_index_no
+    chromosome_index_no = 0
+    sql_outstanding_jobs = "Select * from dbo.[OutstandingJobsForProcessing_BenchMarking_Iterations] WHERE BenchMarkName = '" + bench_mark_name + "'"
+    outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
+    sql_locations = "Select * from dbo.LocationDistancesNorm_BenchMarking WHERE BenchMarkName = '" + bench_mark_name + "'"
+    locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
+    
+    chromosome_capacity = min(outstanding_jobsdf["JobCount"]-1) #hours
+    outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].fillna(0)
+    
+    #cleanse 
+    priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
+    outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
+    #set all jobs older than 100hrs to 100hrs. Therefore reducing their influence
+    premature_outstanding_jobs_est_duration_sum = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]["EstimatedJobDuration"].sum()
+    if premature_outstanding_jobs_est_duration_sum > chromosome_capacity*3:
+        outstanding_jobsdf = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]
+    else:
+        outstanding_jobsdf.loc[outstanding_jobsdf["HoursToTarget"]>=hours_to_target_ignore_threshold,"HoursToTarget"] = hours_to_target_ignore_threshold
+    
+    #normalise data
+    min_max_scaler = preprocessing.MinMaxScaler()
+    x = outstanding_jobsdf[["HoursToTarget"]].astype("float")
+    x_scaled = min_max_scaler.fit_transform(x)
+    outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
+    
+    potential_genes = list(set(outstanding_jobsdf.index.tolist()) - set([0,-1]))
+    
+    #find the potentially largest chromosome size
+    outstanding_jobs_by_duration = outstanding_jobsdf.loc[:,"EstimatedJobDuration"].sort_values().to_frame()
+    outstanding_jobs_by_duration["RollingDurationSum"] = outstanding_jobs_by_duration.rolling(window = 10000, min_periods = 1 ).sum()
+    outstanding_jobs_by_duration = outstanding_jobs_by_duration.reset_index()
+    outstanding_jobs_over_hrs = outstanding_jobs_by_duration[outstanding_jobs_by_duration["RollingDurationSum"] >= chromosome_capacity].index
+    
+    max_chromosome_size = min(outstanding_jobs_over_hrs)
+    pop_column_headers = list(range(0,max_chromosome_size+1))
+    
+    #create a lookup of nomalised positional costs
+    positions_cost_lookup = pd.DataFrame({"position":range(1,max_chromosome_size+1)})
+    positions_cost_lookup["inverse cost"] = 1/(np.log(positions_cost_lookup["position"]+1))
+    min_pos_cost = min(positions_cost_lookup["inverse cost"])
+    max_pos_cost = max(positions_cost_lookup["inverse cost"])
+    positions_cost_lookup["cost_norm"] = ((positions_cost_lookup["inverse cost"]-min_pos_cost)/(max_pos_cost-min_pos_cost))*-1
+    
+    #outstanding_jobs_for_priority_genesdf = outstanding_jobsdf["Priority"]
+    
+    #import locations
+    #x = locations_alldf[["MetersBetweenPoints"]].astype(float)           
+    #x_scaled = min_max_scaler.fit_transform(x)
+    #locations_alldf["MetersBetweenPoints_norm"] = x_scaled
+      
+    #create lookups
+    hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
+    priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
+    
+            
+    #Create population-------------------------------------------------------------
+    #    max_genes = potential_genes[-1]
+    chromosome_complete = 0
+    population_size = 0
+    population = {}
+    #    constraint_travel_time_values= {}
+    #    chromosome_index_no = 0
+    
+    
+    
+    if population_selection_type == "include artifical selection":
+        while population_size <= artificial_selection_limit-1:
+    #            occupied_capacity = 0
+            chromosome_complete = 0
+            chromosome = [0] #zero is a dummy job representing the techs initial start location
+            #create artificial population - i.e. a population of possible elites. 
+            #If the obj is to reduce time to target cost then might as well start population with a mixture of lowest cost genes
+            outstanding_jobs_count = outstanding_jobsdf[outstanding_jobsdf.index>0].iloc[:,1].count()
+            artificial_selection_sample_size = max(artificial_selection_sample_size,max_chromosome_size/outstanding_jobs_count)
+            artificial_populationdf = outstanding_jobsdf[outstanding_jobsdf.index>0].nsmallest(np.floor(artificial_selection_sample_size*outstanding_jobs_count).astype(int),columns="HoursToTarget")
+            potential_artificial_genes = set(artificial_populationdf.index)
+            while chromosome_complete <= max_chromosome_size-1:
+                #get a random gene from the available genes
+                valid_genes = list(potential_artificial_genes - set(chromosome))#- set([-1,0]))
+                random_gene = random.choice(valid_genes)
+                chromosome.append(random_gene)
+                chromosome_complete = chromosome_complete + 1    
+            chromosome_index_no = get_new_chromosome_index()        
+            population.update({chromosome_index_no:chromosome})
+            population_size = population_size + 1
+    
+    while population_size <= population_size_limit-1:
+        #maintain a running totalx of occupied capacity
+    #        occupied_capacity = 0
         chromosome_complete = 0
         chromosome = [0] #zero is a dummy job representing the techs initial start location
-        #create artificial population - i.e. a population of possible elites. 
-        #If the obj is to reduce time to target cost then might as well start population with a mixture of lowest cost genes
-        outstanding_jobs_count = outstanding_jobsdf[outstanding_jobsdf.index>0].iloc[:,1].count()
-        artificial_selection_sample_size = max(artificial_selection_sample_size,max_chromosome_size/outstanding_jobs_count)
-        artificial_populationdf = outstanding_jobsdf[outstanding_jobsdf.index>0].nsmallest(np.floor(artificial_selection_sample_size*outstanding_jobs_count).astype(int),columns="HoursToTarget")
-        potential_artificial_genes = set(artificial_populationdf.index)
         while chromosome_complete <= max_chromosome_size-1:
             #get a random gene from the available genes
-            valid_genes = list(potential_artificial_genes - set(chromosome))#- set([-1,0]))
+            valid_genes = list(set(potential_genes) - set(chromosome))       
             random_gene = random.choice(valid_genes)
             chromosome.append(random_gene)
             chromosome_complete = chromosome_complete + 1    
         chromosome_index_no = get_new_chromosome_index()        
         population.update({chromosome_index_no:chromosome})
         population_size = population_size + 1
-
-while population_size <= population_size_limit-1:
-    #maintain a running totalx of occupied capacity
-#        occupied_capacity = 0
-    chromosome_complete = 0
-    chromosome = [0] #zero is a dummy job representing the techs initial start location
-    while chromosome_complete <= max_chromosome_size-1:
-        #get a random gene from the available genes
-        valid_genes = list(set(potential_genes) - set(chromosome))       
-        random_gene = random.choice(valid_genes)
-        chromosome.append(random_gene)
-        chromosome_complete = chromosome_complete + 1    
-    chromosome_index_no = get_new_chromosome_index()        
-    population.update({chromosome_index_no:chromosome})
-    population_size = population_size + 1
-
-populationdf = pd.DataFrame({})
-populationdf = pd.DataFrame.from_dict(population,orient="index")
-population_additional_columns(populationdf)
-population_costs(populationdf)
-     
-
-#start the evolution-----------------------------------------------------------
-generation = 1    
-#initialise audit
-audit = pd.DataFrame(columns=["GenerationID","MinCost"])
-while generation <= convergence_generation:
-    breeding = 1
-#        child_population = {}
-    child_populationdf = pd.DataFrame(columns=populationdf.columns)
-    #breed the kids
-    while breeding <= population_size_limit/2:
-        parents = [0,0]
-        parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]   
-        if crossover_type == "parallel":
-            child_populationdf = child_populationdf.append(gene_crossover_parallel(populationdf,parents))
-        elif crossover_type == "diagonal":
-            child_populationdf = child_populationdf.append(gene_crossover_diagonal(populationdf,parents))
-        breeding = breeding + 1 
-    #remove the 'size' column and transpose to a list
-#        child_population = child_populationdf.iloc[:,pop_column_headers].transpose().to_dict("list")
-    #get children costs and append to main population dataframe
-    child_populationdf["RowChanged"] = 1
-    child_populationdf["GenerationID"] = generation
-    child_populationdf["Mutations"] = 0
-
-    population_costs(child_populationdf)
-    populationdf = populationdf.append(child_populationdf)
-    populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
-    mutation(populationdf)
-    #recalculate costs for the mutated chromosomes
+    
+    populationdf = pd.DataFrame({})
+    populationdf = pd.DataFrame.from_dict(population,orient="index")
+    population_additional_columns(populationdf)
     population_costs(populationdf)
-
-    audit_record = pd.DataFrame([[generation,min(populationdf["cost_Total"])]], columns=["GenerationID","MinCost"])
-    audit = audit.append(audit_record)
-    generation = generation + 1    
-
-print("----%s seconds ---" % (time.time() - start_time))
-
-#output for analysis
-#outstanding_jobsdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\outstanding_jobsdf.csv")
-#locations_alldf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\locations_alldf.csv")
-#populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\populationdf.csv")
-
-##get the pop record that matches the last min cost
-#populationdf = populationdf.reset_index(inplace=True)
-best_solutionsdf = populationdf[populationdf["cost_Total"] == audit_record.loc[0,"MinCost"]]
-best_solution_index = best_solutionsdf.index[0]
-compile_best_solution(best_solution_index)
-
-
-
+         
+    
+    #start the evolution-----------------------------------------------------------
+    generation = 1    
+    #initialise audit
+    audit = pd.DataFrame(columns=["GenerationID","MinCost"])
+    while generation <= convergence_generation:
+        breeding = 1
+    #        child_population = {}
+        child_populationdf = pd.DataFrame(columns=populationdf.columns)
+        #breed the kids
+        while breeding <= population_size_limit/2:
+            parents = [0,0]
+            parents = [select_parent_for_mating(populationdf,3),select_parent_for_mating(populationdf,3)]   
+            if crossover_type == "parallel":
+                child_populationdf = child_populationdf.append(gene_crossover_parallel(populationdf,parents))
+            elif crossover_type == "diagonal":
+                child_populationdf = child_populationdf.append(gene_crossover_diagonal(populationdf,parents))
+            breeding = breeding + 1 
+        #remove the 'size' column and transpose to a list
+    #        child_population = child_populationdf.iloc[:,pop_column_headers].transpose().to_dict("list")
+        #get children costs and append to main population dataframe
+        child_populationdf["RowChanged"] = 1
+        child_populationdf["GenerationID"] = generation
+        child_populationdf["Mutations"] = 0
+    
+        population_costs(child_populationdf)
+        populationdf = populationdf.append(child_populationdf)
+        populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
+        mutation(populationdf)
+        #recalculate costs for the mutated chromosomes
+        population_costs(populationdf)
+    
+        audit_record = pd.DataFrame([[generation,min(populationdf["cost_Total"])]], columns=["GenerationID","MinCost"])
+        audit = audit.append(audit_record)
+        generation = generation + 1    
+    
+#    print("----%s seconds ---" % (time.time() - start_time))
+    
+    #output for analysis
+    #outstanding_jobsdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\outstanding_jobsdf.csv")
+    #locations_alldf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\locations_alldf.csv")
+    #populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\populationdf.csv")
+    
+    ##get the pop record that matches the last min cost
+    #populationdf = populationdf.reset_index(inplace=True)
+    best_solutionsdf = populationdf[populationdf["cost_Total"] == audit_record.loc[0,"MinCost"]]
+    best_solution_index = best_solutionsdf.index[0]
+    compile_best_solution(best_solution_index)
+    
+    bench_mark_results.append(best_solution_compiled)
+    
 
 
 
