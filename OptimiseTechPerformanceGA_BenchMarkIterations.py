@@ -24,9 +24,8 @@ import os
 #,crossover_type = "diagonal" #gene crossover type [diagonal,parallel]
 #,parent_selection_type = "random"):
 
-chromosome_capacity = 4 #hours
 population_size_limit = 100
-convergence_generation = 20
+convergence_generation = 15
 artificial_selection_fraction = 0.1 
 artificial_selection_sample_size = 0.25
 mutation_rate = 0.10 #%
@@ -48,15 +47,16 @@ if env != "7-PC" :
                          "Server=CHADWUA1\DW;"
                          "Database=City_DW;"
                          "Trusted_Connection=yes")
-    sql_outstanding_jobs = "Select * from dbo.OutstandingJobsForProcessing_BenchMarking WHERE BenchMarkName = '20180704_0400_1643'"
+    sql_outstanding_jobs = "Select * from dbo.[OutstandingJobsForProcessing_BenchMarking_Iterations] WHERE BenchMarkName = '2018-07-03 04:00:00'"
     outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
-    sql_locations = "Select * from dbo.LocationDistancesNorm_BenchMarking" #  where ResourceKey = " + str(ResourceKey)
+    sql_locations = "Select * from dbo.LocationDistancesNorm_BenchMarking WHERE BenchMarkName = '2018-07-03 04:00:00'" #  where ResourceKey = " + str(ResourceKey)
     locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
 else:
 #if at home import from CSV
     outstanding_jobsdf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\OutstandingJobsForProcessing.csv").set_index("GeneID")
     locations_alldf = pd.read_csv(r"C:\Users\7\Documents\GitHub\work-techoptimisation\LocationDistancesNorm.csv").set_index("LocationLookupKey")
 
+chromosome_capacity = min(outstanding_jobsdf["JobCount"]-1) #hours
 
 # dev - remove all records bar those for a specific resource key
 #outstanding_jobsdf = outstanding_jobsdf[outstanding_jobsdf["ResourceKey"] == 1630]   
@@ -357,7 +357,7 @@ def get_new_chromosome_index():
 #Analysis
 def compile_best_solution(sol_index):
     global best_solution_compiled
-#    sol_index = 1
+#    sol_index = 422
     best_solutiondf = populationdf[populationdf.index == sol_index]
     best_solution_jobsdf = best_solutiondf.iloc[0,pop_column_headers].to_frame()
     best_solution_jobsdf = best_solution_jobsdf.rename(columns={best_solution_jobsdf.columns[0]:"BestJobID"})

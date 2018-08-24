@@ -1,20 +1,20 @@
-drop table dbo.OutstandingJobsForProcessing
 EXEC Reporting.DropTempTablesFromSession
+DECLARE @OutstandingDate AS DATETIME = '2018-07-06 06:00'
+DECLARE @ResourceKey AS INT = 8435
+DECLARE @BenchaMarkName AS VARCHAR(100) = '20180706_0600_8435'
 
---initial starting location co-ordinates
-DECLARE @ResourceStartLongitude DECIMAL(18,10) = 145.284036
-DECLARE @ResourceStartLatitude DECIMAL(18,10) = -37.791168
-
---get all outstanding jobs
+--get all outstanding jobs on the morning
 --	with no response
 SELECT
 	'Response' JobType
    ,ffe.ResourceKey
    ,ffe.faultid
    ,ffe.CalloutDate CalloutDateTime
-   ,ff.StoreKey
-   ,s.Longitude
+   ,ffe.FirstOnSiteDate
+   ,ff.FixedEODate
    ,s.Latitude
+   ,s.Longitude
+   ,ff.StoreKey
    ,ffe.Priority
    ,ffe.ResponseTargetDate KPITargetDate
    ,1 EstimatedJobDuration
@@ -24,13 +24,13 @@ INNER JOIN Fault.FactFaults ff
 	ON ffe.faultid = ff.faultid
 INNER JOIN Common.Stores s
 	ON ff.StoreKey = s.StoreKey
-WHERE ffe.Fixed = 0
-AND ffe.Completed = 0
+WHERE @OutstandingDate BETWEEN ffe.CalloutDate AND ISNULL(ffe.FirstOnSiteDate,@OutstandingDate)  --OR CAST(ffe.CalloutDate AS DATE) = @OutstandingDate)
 AND ff.Cancelled = 0
 AND ffe.Cancelled = 0
-AND ff.AlarmDateKey > 20180101
-AND ff.KPI = 1
-AND ff.FirstOnSiteDate IS NULL
+--AND ff.KPI = 1
+AND ffe.ResourceKey = @ResourceKey
+ORDER BY ffe.FirstOnSiteDate
+
 
 --	with no repair
 INSERT INTO #OutstandingJobs
@@ -39,9 +39,11 @@ INSERT INTO #OutstandingJobs
 	   ,ffe.ResourceKey
 	   ,ffe.faultid
 	   ,ffe.CalloutDate CalloutDateTime
-	   ,ff.StoreKey
-	   ,s.Longitude
+	   ,ffe.FirstOnSiteDate
+	   ,ffe.FixedEODate
 	   ,s.Latitude
+	   ,s.Longitude
+	   ,ff.StoreKey
 	   ,ffe.Priority
 	   ,ffe.RepairTargetDate KPITargetDate
 	   ,1 EstimatedJobDuration
@@ -50,22 +52,29 @@ INSERT INTO #OutstandingJobs
 		ON ffe.faultid = ff.faultid
 	INNER JOIN Common.Stores s
 		ON ff.StoreKey = s.StoreKey
-	WHERE ffe.Fixed = 0
-	AND ffe.Completed = 0
+	WHERE @OutstandingDate BETWEEN ffe.CalloutDate AND ISNULL(ffe.FixedEODate,@OutstandingDate)
 	AND ff.Cancelled = 0
 	AND ffe.Cancelled = 0
-	AND ff.AlarmDateKey > 20180101
-	AND ff.KPI = 1
+	AND ffe.ResourceKey = @ResourceKey
+	--AND ff.KPI = 1
 	AND NOT EXISTS (SELECT
 			''
 		FROM #OutstandingJobs oj
 		WHERE ffe.faultid = oj.faultid
 		AND ffe.CalloutDate = oj.CalloutDateTime)
 
-
 SELECT
 	ROW_NUMBER() OVER (PARTITION BY oj.ResourceKey ORDER BY oj.JobType) GeneID
-   ,*
+   ,JobType
+   ,ResourceKey
+   ,faultid
+   ,CalloutDateTime
+   ,StoreKey
+   ,Longitude
+   ,Latitude
+   ,Priority
+   ,KPITargetDate
+   ,EstimatedJobDuration
    ,DATEDIFF(HOUR,oj.CalloutDateTime,oj.KPITargetDate) AS HoursToTarget
 INTO #OutstandingJobsWithCL
 FROM #OutstandingJobs oj
@@ -102,22 +111,51 @@ SELECT
 FROM #OutstandingJobs oj
 GROUP BY ResourceKey
 
+--DELETE FROM [dbo].[OutstandingJobsForProcessing_BenchMarking]
+--WHERE ResourceKey = 1630
 
-SELECT
-	GeneID
-   ,JobType
-   ,o.ResourceKey
-   ,faultid
-   ,CalloutDateTime
-   ,StoreKey
-   ,Longitude
-   ,Latitude
-   ,Priority
-   ,KPITargetDate
-   ,EstimatedJobDuration
-   ,HoursToTarget
-INTO dbo.OutstandingJobsForProcessing
-FROM #OutstandingJobsWithCL o
-Inner Join Fault.DimResources dr
-ON o.ResourceKey = dr.ResourceKey
-WHERE dr.SubType IN ('RST','RHVACT')
+INSERT INTO [dbo].[OutstandingJobsForProcessing_BenchMarking]
+	SELECT
+		GeneID
+	   ,JobType
+	   ,ResourceKey
+	   ,faultid
+	   ,CalloutDateTime
+	   ,StoreKey
+	   ,Longitude
+	   ,Latitude
+	   ,Priority
+	   ,KPITargetDate
+	   ,EstimatedJobDuration
+	   ,HoursToTarget
+	   ,@BenchaMarkName
+	FROM #OutstandingJobsWithCL o
+
+
+--delete outliers
+DELETE FROM dbo.[OutstandingJobsForProcessing_BenchMarking]
+WHERE ResourceKey = 8435
+	AND StoreKey = 5432
+
+
+DELETE FROM [OutstandingJobsForProcessing_BenchMarking]
+WHERE ResourceKey = 8435
+	AND StoreKey = 933
+
+UPDATE dbo.OutstandingJobsForProcessing_BenchMarking
+SET Latitude = -35.320383
+   ,Longitude = 149.133153
+WHERE ResourceKey = 8435
+AND BenchMarkName = '20180706_0600_8435'
+AND JobType = 'Current Location'
+
+
+--select top 1000 * from [OutstandingJobsForProcessing_BenchMarking] WHERE BenchMarkName = '20180706_0600_8435'
+
+
+
+
+
+
+
+
