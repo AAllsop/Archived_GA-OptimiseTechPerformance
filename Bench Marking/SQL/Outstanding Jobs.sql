@@ -1,8 +1,11 @@
-DECLARE @ResourceKey AS INT = 1653
+DECLARE @ResourceKey AS INT = (SELECT MAX(tdj.ResourceKey) FROM dbo.TechDoneJobs tdj)
 
 DROP TABLE #AppRefreshDateTimes
 DROP TABLE #AppRefreshDateTimesAndJobCounts
 TRUNCATE TABLE [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
+
+Declare @FirstDoneDateTime AS DATETIME = (SELECT MIN(DoneDate) FROM TechDoneJobs)
+Declare @LastDoneDateTime AS DATETIME = (SELECT MAX(DoneDate) FROM TechDoneJobs)
 ;
 WITH InitialDatesToProcess
 AS
@@ -10,7 +13,7 @@ AS
 		CAST(DoneDate AS DATETIME) + CAST('04:00' AS DATETIME) InitialDateTime
 	FROM (SELECT DISTINCT
 			DoneDate
-		FROM dbo.TechDoneJobs) i)
+		FROM TechDoneJobs) i)
 
 --App to get refreshed at 4am each mornign the tech worked and whenever a high priority job is raised
 SELECT
@@ -19,7 +22,7 @@ SELECT
    ,1 WakeUpDateTime
 INTO #AppRefreshDateTimes
 FROM dbo.TechDoneJobs tdj
-WHERE Priority = 'High'
+WHERE tdj.CalloutDate BETWEEN @FirstDoneDateTime AND @LastDoneDateTime
 UNION
 SELECT
 	InitialDateTime
@@ -63,7 +66,7 @@ SET @JobCount = (SELECT
 
 DROP TABLE #OutstandingJobs
 DROP TABLE #OutstandingJobsWithCL
-SET @BenchMarkName = CONVERT(VARCHAR,@OutstandingDate,120)
+SET @BenchMarkName = REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(VARCHAR,@OutstandingDate,120),'-','_'),':',''),'.000',''),' ' ,'_')
 
 --get the geo-coordinates for the called out job
 ;
@@ -108,7 +111,7 @@ INNER JOIN Fault.FactFaults ff
 	ON ffe.faultid = ff.faultid
 INNER JOIN Common.Stores s
 	ON ff.StoreKey = s.StoreKey
-WHERE @OutstandingDate BETWEEN ffe.CalloutDate AND ISNULL(ffe.FirstOnSiteDate,@OutstandingDate)  --OR CAST(ffe.CalloutDate AS DATE) = @OutstandingDate)
+WHERE @OutstandingDate >= ffe.CalloutDate --AND ISNULL(ffe.FirstOnSiteDate,@OutstandingDate)  --OR CAST(ffe.CalloutDate AS DATE) = @OutstandingDate)
 AND ff.Cancelled = 0
 AND ffe.Cancelled = 0
 --AND ff.KPI = 1
@@ -137,7 +140,7 @@ INSERT INTO #OutstandingJobs
 		ON ffe.faultid = ff.faultid
 	INNER JOIN Common.Stores s
 		ON ff.StoreKey = s.StoreKey
-	WHERE @OutstandingDate BETWEEN ffe.CalloutDate AND ISNULL(ffe.FixedEODate,@OutstandingDate)
+	WHERE @OutstandingDate >= ffe.CalloutDate --AND ISNULL(ffe.FixedEODate,@OutstandingDate)
 	AND ff.Cancelled = 0
 	AND ffe.Cancelled = 0
 	AND ffe.ResourceKey = @ResourceKey
@@ -167,7 +170,7 @@ INSERT INTO #OutstandingJobs
 	FROM Fault.FactPPM fp
 	INNER JOIN Common.Stores s
 		ON fp.StoreKey = s.StoreKey
-	WHERE @OutstandingDate BETWEEN fp.ReleaseDate AND ISNULL(fp.CompletedDate,@OutstandingDate)
+	WHERE @OutstandingDate >= fp.ReleaseDate --AND ISNULL(fp.CompletedDate,@OutstandingDate)
 	AND fp.FirstCallOutEngResourceKey = @ResourceKey
 	AND fp.TargetCompletionDate >= DATEADD(M,DATEDIFF(M,0,@OutstandingDate),0)
 
@@ -185,7 +188,7 @@ SELECT
    ,Priority
    ,KPITargetDate
    ,EstimatedJobDuration
-   ,DATEDIFF(HOUR,oj.CalloutDateTime,oj.KPITargetDate) AS HoursToTarget
+   ,DATEDIFF(HOUR,@OutstandingDate,oj.KPITargetDate) AS HoursToTarget
    ,KPIAchieved
 INTO #OutstandingJobsWithCL
 FROM #OutstandingJobs oj
@@ -230,7 +233,6 @@ FROM #OutstandingJobs oj
 WHERE CAST(@OutstandingDate AS TIME) <> '04:00:00.0000000'
 GROUP BY ResourceKey
 
-
 INSERT INTO [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
 	SELECT
 		GeneID
@@ -256,6 +258,12 @@ WHERE AppRefreshDateTime = @OutstandingDate
 
 END
 
+DELETE o
+from dbo.[OutstandingJobsForProcessing_BenchMarking_Iterations] o
+WHERE not exists (select '' from dbo.TechDoneJobs tdj where o.faultid = tdj.JobID)
+AND JobType <> 'Current Location'
 
+DELETE FROM [OutstandingJobsForProcessing_BenchMarking_Iterations]
+WHERE ResourceKey = 1653 AND StoreKey = 3338 
 
 

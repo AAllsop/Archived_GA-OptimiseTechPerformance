@@ -123,3 +123,8 @@ Select
 ,ROW_NUMBER() OVER (ORDER BY FirstOnSiteDate,RepairTargetDate) RowNo
 INTO dbo.TechDoneJobs
 from #DoneJobs dj 
+
+
+
+
+select top 1000 * from dbo.LocationDistancesNorm_BenchMarking ldnbm WHERE ldnbm.LocationKeyStartPoint

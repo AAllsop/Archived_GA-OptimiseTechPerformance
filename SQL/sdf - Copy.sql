@@ -1,8 +1,6 @@
-DECLARE @ResourceKey AS INT = 1653
-
 DROP TABLE #AppRefreshDateTimes
-DROP TABLE #AppRefreshDateTimesAndJobCounts
-TRUNCATE TABLE [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
+drop table #AppRefreshDateTimesAndJobCounts
+truncate table [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
 ;
 WITH InitialDatesToProcess
 AS
@@ -12,79 +10,66 @@ AS
 			DoneDate
 		FROM dbo.TechDoneJobs) i)
 
---App to get refreshed at 4am each mornign the tech worked and whenever a high priority job is raised
+--select top 1000 * from dbo.TechDoneJobs
+
+
 SELECT
 	tdj.CalloutDate AppRefreshDateTime
    ,0 Processed
-   ,1 WakeUpDateTime
 INTO #AppRefreshDateTimes
 FROM dbo.TechDoneJobs tdj
-WHERE Priority = 'High'
+INNER JOIN InitialDatesToProcess
+	ON CAST(tdj.CalloutDate AS DATE) = CAST(InitialDateTime AS DATE)
 UNION
 SELECT
 	InitialDateTime
    ,0
-   ,0
 FROM InitialDatesToProcess
 ORDER BY 1
-
 --get the number of jobs done (so as to calc how many he an do) after each iteration
-SELECT
+SELECT 
 	*
    ,(SELECT
 			COUNT(*)
 		FROM dbo.TechDoneJobs t
-		WHERE CAST(t.DoneDate AS DATE) = CAST(a.AppRefreshDateTime AS DATE)) 
-	JobCount
+		WHERE CAST(t.CalloutDate AS DATE) = CAST(a.AppRefreshDateTime AS DATE)
+		AND t.CalloutDate >= a.AppRefreshDateTime) JobCount
 INTO #AppRefreshDateTimesAndJobCounts
 FROM #AppRefreshDateTimes a
 
 
+
+DECLARE @ResourceKey AS INT = 1653
 DECLARE @OutstandingDate AS DATETIME = (SELECT
 		MIN(AppRefreshDateTime)
 	FROM #AppRefreshDateTimes
 	WHERE Processed = 0)
-DECLARE @JobCount AS INT
+Declare @JobCount AS INT
 DECLARE @BenchMarkName AS VARCHAR(100)
-DECLARE @CL_Lat AS FLOAT
-DECLARE @CL_Lon AS FLOAT
+Declare @CL_Lat AS FLOAT
+Declare @CL_Lon AS FLOAT
 
-WHILE @OutstandingDate IS NOT NULL
+WHILE @OutstandingDate is not null 
 BEGIN
 SET @OutstandingDate = (SELECT
 		MIN(AppRefreshDateTime)
 	FROM #AppRefreshDateTimesAndJobCounts
 	WHERE Processed = 0)
 
-SET @JobCount = (SELECT
-		(JobCount)
-	FROM #AppRefreshDateTimesAndJobCounts
-	WHERE AppRefreshDateTime = @OutstandingDate)
+SET @JobCount = (SELECT (JobCount) FROM #AppRefreshDateTimesAndJobCounts WHERE AppRefreshDateTime = @OutstandingDate)
 
 DROP TABLE #OutstandingJobs
 DROP TABLE #OutstandingJobsWithCL
 SET @BenchMarkName = CONVERT(VARCHAR,@OutstandingDate,120)
 
 --get the geo-coordinates for the called out job
-;
-WITH a
-AS
-(SELECT
-		MAX(tdj.RowNo) RowNo
-	FROM dbo.TechDoneJobs tdj
-	WHERE tdj.DoneDate = CAST(@OutstandingDate AS DATE)
-	AND
-	CASE
-		WHEN KPIType IN ('Response','PPM') THEN tdj.FirstOnSiteDate
-		ELSE tdj.FixedEODate
-	END <= @OutstandingDate)
+; WITH a AS(
+select MAX(tdj.RowNo) RowNo from dbo.TechDoneJobs tdj WHERE tdj.DoneDate = CAST(@OutstandingDate AS DATE)
+AND CASE WHEN KPITYpe IN ('Response','PPM') then tdj.FirstOnSiteDate ELSE tdj.FixedEODate END <= @OutstandingDate)
 
-SELECT
-	@CL_Lat = tdj.Latitude
-   ,@CL_Lon = tdj.Longitude
-FROM dbo.TechDoneJobs tdj
-INNER JOIN a
-	ON tdj.RowNo = a.RowNo
+select @CL_Lat = tdj.Latitude,@CL_Lon= tdj.Longitude from dbo.TechDoneJobs tdj 
+Inner Join a
+ON tdj.RowNo = a.RowNo
 
 --get all outstanding jobs on the morning
 --	with no response
@@ -211,7 +196,6 @@ GROUP BY ResourceKey
 
 UNION
 --insert a starting location for the called out job
---(although this will be overwritten later)
 SELECT
 	0 GeneID
    ,'Current Location' JobType
@@ -247,7 +231,7 @@ INSERT INTO [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
 	   ,HoursToTarget
 	   ,@BenchMarkName
 	   ,KPIAchieved
-	   ,@JobCount
+	   ,@JobCount 
 	FROM #OutstandingJobsWithCL o
 
 UPDATE #AppRefreshDateTimesAndJobCounts
@@ -257,5 +241,74 @@ WHERE AppRefreshDateTime = @OutstandingDate
 END
 
 
+--UPDATE dbo.OutstandingJobsForProcessing_BenchMarking
+--SET Latitude = -35.320383
+--   ,Longitude = 149.133153
+--WHERE ResourceKey = 8435
+--AND BenchMarkName = '20180706_0600_8435'
+--AND JobType = 'Current Location'
 
 
+--select top 1000 * from [OutstandingJobsForProcessing_BenchMarking] WHERE BenchMarkName = '20180706_0600_8435'
+
+
+--SELECT TOP 1000
+--	*
+--FROM #OutstandingJobs
+--ORDER BY 4
+
+
+
+--insert a starting lcoation for each day
+; WITH cl AS (select CAST(AppRefreshDateTime AS DATE), MIN( AppRefreshDateTime) from #AppRefreshDateTimesAndJobCounts
+group by CAST(AppRefreshDateTime AS DATE))
+
+
+
+SELECT  * FROM  #AppRefreshDateTimesAndJobCounts
+
+
+
+
+select top 1000 * from dbo.TechDoneJobs tdj WHERE tdj.DoneDate = '2018-07-03'
+order by tdj.FirstOnSiteDate
+
+
+--
+
+; WITH a AS(
+select MAX(tdj.RowNo) RowNo from dbo.TechDoneJobs tdj WHERE tdj.DoneDate = '2018-07-03'
+AND CASE WHEN KPITYpe IN ('Response','PPM') then tdj.FirstOnSiteDate ELSE tdj.FixedEODate END <= '2018-07-03 16:29:00.000')
+
+select tdj.Latitude,tdj.Longitude from dbo.TechDoneJobs tdj 
+Inner Join a
+ON tdj.RowNo = a.RowNo
+		
+
+
+
+
+
+SELECT TOP 1000
+	*
+FROM [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
+
+
+WHERE BenchMarkName = '2018-07-03 04:00:00'
+order by JobType,faultid
+
+select top 1000 * from [dbo].[OutstandingJobsForProcessing_BenchMarking_Iterations]
+
+select top 1000 * from dbo.TechDoneJobs tdj
+WHERE DoneDate = '2018-07-03' order by tdj.FirstOnSiteDate
+
+
+; WITH a AS (
+SELECT tdj.DoneDate, MIN(tdj.FirstOnSiteDate) FirstOnSiteDate from dbo.TechDoneJobs tdj
+group by tdj.DoneDate)
+
+select a.DoneDate,tdj.StoreKey,tdj.Latitude,tdj.Longitude from dbo.TechDoneJobs tdj
+Inner Join a ON tdj.FirstOnSiteDate = a.FirstOnSiteDate
+
+
+select top 1000 * from dbo.LocationDistancesNorm_BenchMarking WHERE LocationLookupKey = '2969|2969'

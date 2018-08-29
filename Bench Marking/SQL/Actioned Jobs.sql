@@ -123,3 +123,6 @@ Select
 ,ROW_NUMBER() OVER (ORDER BY FirstOnSiteDate,RepairTargetDate) RowNo
 INTO dbo.TechDoneJobs
 from #DoneJobs dj 
+
+
+DELETE FROM TechDoneJobs WHERE ResourceKey = 1653 AND StoreKey = 3338

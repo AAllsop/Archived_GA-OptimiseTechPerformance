@@ -131,9 +131,7 @@ SET @BenchMarkname = (SELECT
 
 END
 
-Select *,CASE WHEN BenchMarkName LIKE '%04:00:00%' THEN BenchMarkName ELSE CAST(LEFT(BenchMarkName,10) AS DATETime) END from dbo.LocationDistancesNorm_BenchMarking
 
 
-select top 1000 * from LocationDistancesNorm_BenchMarking
 
 

@@ -1,39 +1,33 @@
 #dev issues - search for "dev"
-#dev - remove gene cross over types when in prod
-import pyodbc
 import pandas as pd
 from sklearn import preprocessing
 import numpy as np
 import random
+import os.path
 
-#pdb.set_trace()
-#def main (
-# chromosome_capacity 
-#,population_size_limit
-#,convergence_generation
-#,artificial_selection_fraction 
-#,artificial_selection_sample_size
-#,mutation_rate
-#,elite_size
-#,hours_to_target_ignore_threshold
-#,ResourceKey
-#,population_selection_type = "full random" #[full random, include artifical selection]
-#,crossover_type = "diagonal" #gene crossover type [diagonal,parallel]
-#,parent_selection_type = "random"):
+GA_input_folder = r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\GIT_OptimiseTechPerformance\Bench Marking\GA Inputs" + "\\"
+GA_output_folder = r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\GIT_OptimiseTechPerformance\Bench Marking\GA Outputs" + "\\"
 
+bench_mark_name = "2018_07_13_040000"
 population_size_limit = 100
-convergence_generation = 15
+convergence_generation = 20
 artificial_selection_fraction = 0.1 
 artificial_selection_sample_size = 0.25
 mutation_rate = 0.10 #%
 elite_size = 10
 hours_to_target_ignore_threshold = 100
 ResourceKey = 1630
-parent_selection_type = "random"
 population_selection_type = "full random" #[full random, include artifical selection]
 crossover_type = "diagonal" #gene crossover type [diagonal,parallel]
+parent_selection_type = "random"
+termination_type = "no change over n iterations"
+termination_type_value = 5
 
+running_benchmark = True
 artificial_selection_limit = np.floor(population_size_limit * artificial_selection_fraction)   
+global chromosome_index_no
+global best_solution_compiled
+chromosome_index_no = 0
 
 #population functions
 def population_additional_columns(pop_df):
@@ -79,22 +73,6 @@ def costs_priority (chromosome):
     r = sum([priority_lookup[x] for x in chromosome])
     return r
 
-def costs_distance (chromosome,attribute):
-#    chromosome = [1,2,4,7,9,11,8,10,5,6]
-    #convert chromosome to a dataframe
-    chromosomedf = pd.DataFrame(chromosome,columns = ["GeneID"])
-    #insert last record so the shift operation (later on) works correctly
-    chromosomedf = chromosomedf.append(chromosomedf.iloc[-1,0:2],ignore_index=True)
-    #get storekey at the job to be undertaken (end point) and the prior location (start point)
-    end_pointdf = chromosomedf.merge(outstanding_jobsdf,left_on="GeneID",right_index=True,how="left")[["GeneID","StoreKey"]]
-    start_pointdf = end_pointdf.shift(periods=1, axis=0).fillna(0)
-    location_distance_loopkupdf = end_pointdf.merge(start_pointdf,left_index=True,right_index=True,how="left")
-    location_distance_loopkupdf["StoreKeyLookup"] = location_distance_loopkupdf["StoreKey_y"].astype(int).astype(str) + "|" + location_distance_loopkupdf["StoreKey_x"].astype(str)
-    location_distancedf = location_distance_loopkupdf.merge(locations_alldf,left_on="StoreKeyLookup",right_on="LocationLookupKey",how="left").set_index(location_distance_loopkupdf.index)
-    location_distancedf.reset_index(inplace=True)
-    r = location_distancedf[attribute].sum()
-    return r
-
 def costs_priority_gene_position (chromosome):
 #    chromosome = [19,23,24,18,26]
     r = 0
@@ -104,8 +82,7 @@ def costs_priority_gene_position (chromosome):
     priority_genes = pd.merge(priority_genes,positions_cost_lookup,left_index=True,right_index=True, how="inner")
     priority_genes.loc[priority_genes["Priority"] != "High","cost_norm"] = 0
     r = sum(priority_genes["cost_norm"])
-    return r
-        
+    return r        
 
 def constraint_travel_time (chromosome):
 #    pop = {}
@@ -126,17 +103,17 @@ def constraint_workable_hours (chromosome):
     return hrs
 
 def job_intra_store_attributes (chromosome,attribute):
-#    chromosome = [8,4,7,10,1,9,3,2,5,11]
+#    chromosome = [23,12]
 #    attribute = "MetersBetweenPoints_norm"
     #convert chromosome to a dataframe
-    chromosomedf = pd.DataFrame(chromosome,columns = ["GeneID"])
+    chromosomedf = pd.DataFrame(chromosome,columns = ["GeneIDs"])
     #insert last record so the shift operation (later on) works correctly
     chromosomedf = chromosomedf.append(chromosomedf.iloc[-1,0:2],ignore_index=True)
     #get storekey at the job to be undertaken (end point) and the prior location (start point)
-    end_pointdf = chromosomedf.merge(outstanding_jobsdf,left_on="GeneID",right_index=True,how="left")[["GeneID","StoreKey"]]
+    end_pointdf = chromosomedf.merge(outstanding_jobsdf,left_on="GeneIDs",right_index=True,how="left")[["GeneIDs","StoreKey"]]
     start_pointdf = end_pointdf.shift(periods=1, axis=0).fillna(0)
     location_distance_loopkupdf = end_pointdf.merge(start_pointdf,left_index=True,right_index=True,how="left")
-    location_distance_loopkupdf["StoreKeyLookup"] = location_distance_loopkupdf["StoreKey_y"].astype(int).astype(str) + "|" + location_distance_loopkupdf["StoreKey_x"].astype(str)
+    location_distance_loopkupdf["StoreKeyLookup"] = location_distance_loopkupdf["StoreKey_y"].astype(int).astype(str) + "|" + location_distance_loopkupdf["StoreKey_x"].astype(int).astype(str)
     location_distancedf = location_distance_loopkupdf.merge(locations_alldf,left_on="StoreKeyLookup",right_index =True,how="left").set_index(location_distance_loopkupdf.index)
     location_distancedf.reset_index(inplace=True)
     attribute_value = location_distancedf[attribute].sum()
@@ -278,154 +255,161 @@ def get_new_chromosome_index():
     chromosome_index_no = chromosome_index_no + 1
     return chromosome_index_no
 
+def check_convergence():
+    r = False
+    generational_sameness = len(audit[audit["MinCost"]==audit_record.iloc[0,1]]["MinCost"])
+    if generational_sameness >= termination_type_value:
+        r = True
+    return r
+
 #------------------------------------------------------------------------------
 #Analysis
 def compile_best_solution(sol_index):
     global best_solution_compiled
-#    sol_index = 422
+#    sol_index = 22
     best_solutiondf = populationdf[populationdf.index == sol_index]
     best_solution_jobsdf = best_solutiondf.iloc[0,pop_column_headers].to_frame()
     best_solution_jobsdf = best_solution_jobsdf.rename(columns={best_solution_jobsdf.columns[0]:"BestJobID"})
     best_solution_jobsdf["BestJobIDOrdering"] = best_solution_jobsdf.index
     #get distance between stores
-    best_solution_jobsdf = pd.merge(best_solution_jobsdf,outstanding_jobsdf,left_on="BestJobID",right_index=True,how="inner")[["BestJobIDOrdering","BestJobID","StoreKey"]]
-    #best_solution_jobsdf = best_solution_jobsdf.rename(columns={"StoreKey":"EndLocationKey"})
+    best_solution_jobsdf = pd.merge(best_solution_jobsdf,outstanding_jobsdf,left_on="BestJobID",right_index=True,how="inner")[["BestJobIDOrdering","BestJobID","StoreKey","BenchMarkName","KPITargetDate"]]
+    from datetime import datetime 
+    best_solution_jobsdf["BenchMarkDate"] = best_solution_jobsdf["BenchMarkName"].apply(lambda x:datetime.strptime(x[:10] + " 00:00:01","%Y_%m_%d %H:%M:%S"))
+    best_solution_jobsdf["KPITargetDate"] = best_solution_jobsdf["KPITargetDate"].apply(lambda x:datetime.strptime(x, "%Y-%m-%d %H:%M:%S.%f"))
+    best_solution_jobsdf["KPIAchievedDueToModel"] = best_solution_jobsdf[["BenchMarkDate","KPITargetDate"]].apply(KPI_achieved,axis=1)
     start_pointdf = best_solution_jobsdf["StoreKey"].shift(periods=1).fillna(0).to_frame()
     best_solution_jobsdf = pd.merge(best_solution_jobsdf,start_pointdf,left_index=True,right_index=True,how="inner")
     best_solution_jobsdf["LocationLookup"] = best_solution_jobsdf["StoreKey_x"].astype(int).astype(str) + "|" + best_solution_jobsdf["StoreKey_y"].astype(int).astype(str)
-    best_solution_jobsdf = pd.merge(best_solution_jobsdf,locations_alldf,left_on="LocationLookup",right_index=True,how="left")
+    best_solution_jobsdf = pd.merge(best_solution_jobsdf,locations_alldf,left_on="LocationLookup",right_index=True,how="inner")
     outstanding_jobsdf["GeneID"] = outstanding_jobsdf.index
     d = pd.merge(outstanding_jobsdf,best_solution_jobsdf,left_on = "GeneID", right_on = "BestJobID", how="left")
     d["BestJobIDOrdering"].fillna(1000,inplace=True)
-    d["KMsBetweenPoints"] = (d[d["BestJobIDOrdering"] < 1000]["MetersBetweenPoints"]/1000).astype(int)
-    best_solution_compiled = d[["BestJobIDOrdering","GeneID","StoreKey","KMsBetweenPoints", "Priority","HoursToTarget","faultid"]].sort_values(["BestJobIDOrdering","HoursToTarget"])
+    d["KMsBetweenPoints"] = (d[d["BestJobIDOrdering"] < 1000]["MetersBetweenPoints"]/1000)
+    best_solution_compiled = d[["BestJobIDOrdering","GeneID","StoreKey","KMsBetweenPoints", "Priority","HoursToTarget","faultid","KPIAchievedDueToModel","BenchMarkDate","KPITargetDate_x"]].sort_values(["BestJobIDOrdering","HoursToTarget"])
+    best_solution_compiled["BenchMarkName"] = bench_mark_name
     
+def KPI_achieved(x):
+    r = 0
+    if x["BenchMarkDate"] <= x ["KPITargetDate"]:
+        r = 1
+    return r
 #------------------------------------------------------------------------------
     
-    
-bench_mark_results = []
-#parent_selection_type = "random" 
-con = pyodbc.connect("Driver={SQL Server Native Client 11.0};"
-                     "Server=CHADWUA1\DW;"
-                     "Database=City_DW;"
-                     "Trusted_Connection=yes")
-bench_mark_names = pd.read_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\GIT_OptimiseTechPerformance\Outputs\benchmark_names.csv")
-bench_mark_names = bench_mark_names["BenchMarkName"].values.tolist()
+#import data
+outstanding_jobsdf = pd.read_csv(GA_input_folder + "Outstanding_Jobs_per_BenchMark.csv")
+outstanding_jobsdf.index = outstanding_jobsdf["GeneID"]
+locations_alldf = pd.read_csv(GA_input_folder  + "Locations_Per_BenchMark.csv")
+locations_alldf.index = locations_alldf["LookupKey"]
 
-for bench_mark_name in bench_mark_names:
-    global chromosome_index_no
-    chromosome_index_no = 0
-    sql_outstanding_jobs = "Select * from dbo.[OutstandingJobsForProcessing_BenchMarking_Iterations] WHERE BenchMarkName = '" + bench_mark_name + "'"
-    outstanding_jobsdf = pd.read_sql_query(sql_outstanding_jobs,con).set_index("GeneID")
-    sql_locations = "Select * from dbo.LocationDistancesNorm_BenchMarking WHERE BenchMarkName = '" + bench_mark_name + "'"
-    locations_alldf = pd.read_sql_query(sql_locations,con).set_index("LocationLookupKey")
-    
-    chromosome_capacity = min(outstanding_jobsdf["JobCount"]-1) #hours
-    outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].fillna(0)
-    
-    #cleanse 
-    priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
-    outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
-    #set all jobs older than 100hrs to 100hrs. Therefore reducing their influence
-    premature_outstanding_jobs_est_duration_sum = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]["EstimatedJobDuration"].sum()
-    if premature_outstanding_jobs_est_duration_sum > chromosome_capacity*3:
-        outstanding_jobsdf = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]
-    else:
-        outstanding_jobsdf.loc[outstanding_jobsdf["HoursToTarget"]>=hours_to_target_ignore_threshold,"HoursToTarget"] = hours_to_target_ignore_threshold
-    
-    #normalise data
-    min_max_scaler = preprocessing.MinMaxScaler()
-    x = outstanding_jobsdf[["HoursToTarget"]].astype("float")
-    x_scaled = min_max_scaler.fit_transform(x)
-    outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
-    
-    potential_genes = list(set(outstanding_jobsdf.index.tolist()) - set([0,-1]))
-    
-    #find the potentially largest chromosome size
-    outstanding_jobs_by_duration = outstanding_jobsdf.loc[:,"EstimatedJobDuration"].sort_values().to_frame()
-    outstanding_jobs_by_duration["RollingDurationSum"] = outstanding_jobs_by_duration.rolling(window = 10000, min_periods = 1 ).sum()
-    outstanding_jobs_by_duration = outstanding_jobs_by_duration.reset_index()
-    outstanding_jobs_over_hrs = outstanding_jobs_by_duration[outstanding_jobs_by_duration["RollingDurationSum"] >= chromosome_capacity].index
-    
-    max_chromosome_size = min(outstanding_jobs_over_hrs)
-    pop_column_headers = list(range(0,max_chromosome_size+1))
-    
-    #create a lookup of nomalised positional costs
-    positions_cost_lookup = pd.DataFrame({"position":range(1,max_chromosome_size+1)})
-    positions_cost_lookup["inverse cost"] = 1/(np.log(positions_cost_lookup["position"]+1))
-    min_pos_cost = min(positions_cost_lookup["inverse cost"])
-    max_pos_cost = max(positions_cost_lookup["inverse cost"])
-    positions_cost_lookup["cost_norm"] = ((positions_cost_lookup["inverse cost"]-min_pos_cost)/(max_pos_cost-min_pos_cost))*-1
-    
-    #outstanding_jobs_for_priority_genesdf = outstanding_jobsdf["Priority"]
-    
-    #import locations
-    #x = locations_alldf[["MetersBetweenPoints"]].astype(float)           
-    #x_scaled = min_max_scaler.fit_transform(x)
-    #locations_alldf["MetersBetweenPoints_norm"] = x_scaled
-      
-    #create lookups
-    hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
-    priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
-    
-            
-    #Create population-------------------------------------------------------------
-    #    max_genes = potential_genes[-1]
-    chromosome_complete = 0
-    population_size = 0
-    population = {}
-    #    constraint_travel_time_values= {}
-    #    chromosome_index_no = 0
-    
-    if population_selection_type == "include artifical selection":
-        while population_size <= artificial_selection_limit-1:
-    #            occupied_capacity = 0
-            chromosome_complete = 0
-            chromosome = [0] #zero is a dummy job representing the techs initial start location
-            #create artificial population - i.e. a population of possible elites. 
-            #If the obj is to reduce time to target cost then might as well start population with a mixture of lowest cost genes
-            outstanding_jobs_count = outstanding_jobsdf[outstanding_jobsdf.index>0].iloc[:,1].count()
-            artificial_selection_sample_size = max(artificial_selection_sample_size,max_chromosome_size/outstanding_jobs_count)
-            artificial_populationdf = outstanding_jobsdf[outstanding_jobsdf.index>0].nsmallest(np.floor(artificial_selection_sample_size*outstanding_jobs_count).astype(int),columns="HoursToTarget")
-            potential_artificial_genes = set(artificial_populationdf.index)
-            while chromosome_complete <= max_chromosome_size-1:
-                #get a random gene from the available genes
-                valid_genes = list(potential_artificial_genes - set(chromosome))#- set([-1,0]))
-                random_gene = random.choice(valid_genes)
-                chromosome.append(random_gene)
-                chromosome_complete = chromosome_complete + 1    
-            chromosome_index_no = get_new_chromosome_index()        
-            population.update({chromosome_index_no:chromosome})
-            population_size = population_size + 1
-    
-    while population_size <= population_size_limit-1:
-        #maintain a running totalx of occupied capacity
-    #        occupied_capacity = 0
+chromosome_capacity = min(outstanding_jobsdf["JobCount"]) #hours
+if chromosome_capacity == 0 :
+    chromosome_capacity=1
+outstanding_jobsdf["EstimatedJobDuration"] = outstanding_jobsdf["EstimatedJobDuration"].fillna(0)
+
+#cleanse 
+priority_dict = {"High":0,"Medium":0.5,"Low":1,"N/A":0}
+outstanding_jobsdf["Priority_norm"] = outstanding_jobsdf["Priority"].map(priority_dict)
+#set all jobs older than 100hrs to 100hrs. Therefore reducing their influence
+non_premature_outstanding_jobs = outstanding_jobsdf[outstanding_jobsdf["HoursToTarget"]<=hours_to_target_ignore_threshold]["EstimatedJobDuration"].sum()
+if non_premature_outstanding_jobs > chromosome_capacity*3:
+    #reduce the HoursToTarget 
+    outstanding_jobsdf.loc[outstanding_jobsdf["HoursToTarget"]>=hours_to_target_ignore_threshold,"HoursToTarget"] = hours_to_target_ignore_threshold
+
+#normalise data
+min_max_scaler = preprocessing.MinMaxScaler()
+x = outstanding_jobsdf[["HoursToTarget"]].astype("float")
+x_scaled = min_max_scaler.fit_transform(x)
+outstanding_jobsdf["HoursToTarget_norm"] = x_scaled
+
+potential_genes = list(set(outstanding_jobsdf.index.tolist()) - set([0,-1]))  
+
+#find the potentially largest chromosome size
+outstanding_jobs_by_duration = outstanding_jobsdf.loc[:,"EstimatedJobDuration"].sort_values().to_frame()
+outstanding_jobs_by_duration["RollingDurationSum"] = outstanding_jobs_by_duration.rolling(window = 10000, min_periods = 1 ).sum()
+outstanding_jobs_by_duration = outstanding_jobs_by_duration.reset_index()
+outstanding_jobs_over_hrs = outstanding_jobs_by_duration[outstanding_jobs_by_duration["RollingDurationSum"] >= chromosome_capacity].index
+
+if running_benchmark == True:
+    if len(potential_genes) < chromosome_capacity:
+        max_chromosome_size = len(potential_genes)
+    else:    
+        max_chromosome_size = chromosome_capacity  
+else:
+    if len(potential_genes) < chromosome_capacity:
+        max_chromosome_size = len(potential_genes)
+    else:    
+        max_chromosome_size = min(outstanding_jobs_over_hrs)
+
+pop_column_headers = list(range(0,max_chromosome_size+1))
+
+#create a lookup of nomalised positional costs
+positions_cost_lookup = pd.DataFrame({"position":range(1,max_chromosome_size+1)})
+positions_cost_lookup["inverse cost"] = 1/(np.log(positions_cost_lookup["position"]+1))
+min_pos_cost = min(positions_cost_lookup["inverse cost"])
+max_pos_cost = max(positions_cost_lookup["inverse cost"])
+positions_cost_lookup["cost_norm"] = ((positions_cost_lookup["inverse cost"]-min_pos_cost)/(max_pos_cost-min_pos_cost))*-1
+
+#create lookups
+hours_to_target_lookup= outstanding_jobsdf["HoursToTarget_norm"].to_dict()
+priority_lookup= outstanding_jobsdf["Priority_norm"].to_dict()
+
+#Create population-------------------------------------------------------------
+chromosome_complete = 0
+population_size = 0
+population = {}
+
+if population_selection_type == "include artifical selection":
+    while population_size <= artificial_selection_limit-1:
+#            occupied_capacity = 0
         chromosome_complete = 0
         chromosome = [0] #zero is a dummy job representing the techs initial start location
+        #create artificial population - i.e. a population of possible elites. 
+        #If the obj is to reduce time to target cost then might as well start population with a mixture of lowest cost genes
+        outstanding_jobs_count = outstanding_jobsdf[outstanding_jobsdf.index>0].iloc[:,1].count()
+        artificial_selection_sample_size = max(artificial_selection_sample_size,max_chromosome_size/outstanding_jobs_count)
+        artificial_populationdf = outstanding_jobsdf[outstanding_jobsdf.index>0].nsmallest(np.floor(artificial_selection_sample_size*outstanding_jobs_count).astype(int),columns="HoursToTarget")
+        potential_artificial_genes = set(artificial_populationdf.index)
         while chromosome_complete <= max_chromosome_size-1:
             #get a random gene from the available genes
-            valid_genes = list(set(potential_genes) - set(chromosome))       
+            valid_genes = list(potential_artificial_genes - set(chromosome))#- set([-1,0]))
             random_gene = random.choice(valid_genes)
             chromosome.append(random_gene)
             chromosome_complete = chromosome_complete + 1    
         chromosome_index_no = get_new_chromosome_index()        
         population.update({chromosome_index_no:chromosome})
         population_size = population_size + 1
-    
-    populationdf = pd.DataFrame({})
-    populationdf = pd.DataFrame.from_dict(population,orient="index")
-    population_additional_columns(populationdf)
-    population_costs(populationdf)
-         
-    
-    #start the evolution-----------------------------------------------------------
-    generation = 1    
-    #initialise audit
-    audit = pd.DataFrame(columns=["GenerationID","MinCost"])
-    while generation <= convergence_generation:
-        breeding = 1
-    #        child_population = {}
+
+while population_size <= population_size_limit-1:
+    #maintain a running totalx of occupied capacity
+#        occupied_capacity = 0
+    chromosome_complete = 0
+    chromosome = [0] #zero is a dummy job representing the techs initial start location
+    while chromosome_complete <= max_chromosome_size-1:
+        #get a random gene from the available genes
+        if not len(list(set(potential_genes) - set(chromosome))):
+            chromosome_complete = max_chromosome_size+1
+        else:
+            valid_genes = list(set(potential_genes) - set(chromosome))       
+        random_gene = random.choice(valid_genes)
+        chromosome.append(random_gene)
+        chromosome_complete = chromosome_complete + 1    
+    chromosome_index_no = get_new_chromosome_index()        
+    population.update({chromosome_index_no:chromosome})
+    population_size = population_size + 1
+
+populationdf = pd.DataFrame({})
+populationdf = pd.DataFrame.from_dict(population,orient="index")
+population_additional_columns(populationdf)
+population_costs(populationdf)
+     
+
+#start the evolution-----------------------------------------------------------
+generation = 1    
+#initialise audit
+audit = pd.DataFrame(columns=["GenerationID","MinCost"])
+while generation <= convergence_generation:
+    breeding = 1
+    if max_chromosome_size > 1 and len(potential_genes) > max_chromosome_size: # only breed or mutate if enough potential genes exist
         child_populationdf = pd.DataFrame(columns=populationdf.columns)
         #breed the kids
         while breeding <= population_size_limit/2:
@@ -436,44 +420,47 @@ for bench_mark_name in bench_mark_names:
             elif crossover_type == "diagonal":
                 child_populationdf = child_populationdf.append(gene_crossover_diagonal(populationdf,parents))
             breeding = breeding + 1 
-        #remove the 'size' column and transpose to a list
-    #        child_population = child_populationdf.iloc[:,pop_column_headers].transpose().to_dict("list")
         #get children costs and append to main population dataframe
         child_populationdf["RowChanged"] = 1
         child_populationdf["GenerationID"] = generation
         child_populationdf["Mutations"] = 0
-    
         population_costs(child_populationdf)
         populationdf = populationdf.append(child_populationdf)
         populationdf = populationdf.nsmallest(population_size,columns="cost_Total")
+        
         mutation(populationdf)
-        #recalculate costs for the mutated chromosomes
-        population_costs(populationdf)
     
-        audit_record = pd.DataFrame([[generation,min(populationdf["cost_Total"])]], columns=["GenerationID","MinCost"])
-        audit = audit.append(audit_record)
-        generation = generation + 1    
-    
-#    print("----%s seconds ---" % (time.time() - start_time))
-    
-    #output for analysis
-    #outstanding_jobsdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\outstanding_jobsdf.csv")
-    #locations_alldf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\locations_alldf.csv")
-    #populationdf.to_csv(r"C:\Users\allsopa\OneDrive - City Holdings\Development\Development Tasks\20180701_OptimiseTechPerformance\Outputs\populationdf.csv")
-    
-    ##get the pop record that matches the last min cost
-    #populationdf = populationdf.reset_index(inplace=True)
-    best_solutionsdf = populationdf[populationdf["cost_Total"] == audit_record.loc[0,"MinCost"]]
-    best_solution_index = best_solutionsdf.index[0]
-    compile_best_solution(best_solution_index)
-    
-    bench_mark_results.append(best_solution_compiled)
-    
+    #recalculate costs for the mutated chromosomes
+    population_costs(populationdf)
 
+    audit_record = pd.DataFrame([[generation,min(populationdf["cost_Total"])]], columns=["GenerationID","MinCost"])
+    audit = audit.append(audit_record)
+    generation = generation + 1    
 
+    #check convergence
+    if check_convergence() == True:
+        generation = convergence_generation + 1
 
+##get the pop record that matches the last min cost
+#populationdf = populationdf.reset_index(inplace=True)
+best_solutionsdf = populationdf[populationdf["cost_Total"] == audit_record.loc[0,"MinCost"]]
+best_solution_index = best_solutionsdf.index[0]
+compile_best_solution(best_solution_index)
 
+best_solution_compiled = best_solution_compiled[(best_solution_compiled["BestJobIDOrdering"]<1000) & (best_solution_compiled["StoreKey"]!=0)]
+best_solutions_filename = GA_output_folder + "best_solutions.csv"
 
+if not os.path.exists(best_solutions_filename):
+    best_solution_compiled[best_solution_compiled["GeneID"]==-1].to_csv(best_solutions_filename,header=True,index=False)
+best_solution_compiled.to_csv(best_solutions_filename,header=False,mode="a",index=False)
+
+#get the last store that was in the techs optimised list as this'll be the last store he should be at when the list is refreshed
+current_storekey = best_solution_compiled.iloc[-1,2].astype(int)
+current_lat = min(outstanding_jobsdf[outstanding_jobsdf["StoreKey"]==current_storekey]["Latitude"])
+current_lon = min(outstanding_jobsdf[outstanding_jobsdf["StoreKey"]==current_storekey]["Longitude"])
+
+current_store_location = pd.DataFrame({"StoreKey":[current_storekey],"Latitude":[current_lat],"Longitude":[current_lon]})
+current_store_location.to_csv(GA_input_folder + "Current_Store_Location.csv",index=False)
 
 
 
